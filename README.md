@@ -61,7 +61,7 @@ same clip with different look settings skips the slow parts. Delete that folder 
 | `--color` | per creature | Base colour (hex). |
 | `--grade` | `auto` | Background grade: `none`, `cyber` (dark teal/violet, vignette). `auto` = cyber for fiber, circuit and vowels. |
 | `--hair-length` | `1.0` | Strand length (strand, fiber), trace length (circuit), cube/letter size (swarm, vowels). |
-| `--stiffness` | `0.5` | 0 = floppy, 1 = stiff. Strand springiness (strand, fiber) or how tightly particles follow the body (swarm, vowels). |
+| `--stiffness` | per creature | 0 = floppy hair / cooked spaghetti, 1 = stiff spikes (strand default 0.15, fiber 0.45). For swarm/vowels: how tightly particles follow the body (default 0.5). |
 | `--density` | `1.0` | Count multiplier: strands, traces or particles. |
 | `--preview` | off | Render only the first 5 s at half resolution. |
 | `--keep-person` | off | Skip person removal; draw the creature on top (debugging). |
@@ -76,7 +76,7 @@ encoder settings) are in the `CONFIG` dict at the top of `hairify.py`.
 
 | `--creature` | Default colour | What it is |
 |---|---|---|
-| `strand` | `#ff3fa4` | Rubbery strands on the body capsules, Verlet physics: they lag, overshoot and wobble. Glossy shading (dark roots, light tips, specular highlight), dark core body underneath. |
+| `strand` | `#ff3fa4` | Rubbery strands on the body capsules that hang, swing and flop like hair or cooked spaghetti (raise `--stiffness` for wobbly spikes). Glossy shading (dark roots, light tips, specular highlight), dark core body underneath. |
 | `fiber` | `#00e5ff` | Same physics; dark fibers with glowing, colour-shifting tips and light pulses running root→tip on every drum hit. Bloom. |
 | `circuit` | `#19f0ff` | Shaded dark body covered in PCB traces, vias and chips; light pulses run along the traces, in bursts on drum hits. |
 | `swarm` | `#ff3fa4` | Thousands of shaded cubes sprung to points inside the body. Fast moves make them trail; drum hits blast them away from the striking hand. |
@@ -88,6 +88,12 @@ a fixed position on its capsule, so it follows the body. Body parts the tracker 
 hidden (e.g. legs behind a table) are clipped to the person's mask, so real objects in front of the
 person stay in front of the creature. Physics runs at a fixed 120 Hz with substeps, independent of
 the video fps.
+
+Strand physics: Verlet integration at a fixed 120 Hz; the root is pinned to the skin, the first
+points are held in the skin direction (follicle), every segment gently continues the previous one
+(bending stiffness, keeps curves smooth), gravity pulls the rest, segment lengths are enforced
+with dynamic follow-the-leader (Müller et al. 2012) so chains swing freely without exploding.
+`--stiffness` blends in a pull toward the straight rest pose for spikes.
 
 Drum hits come from spectral-flux onset detection on the audio track (`CONFIG["audio"]`).
 

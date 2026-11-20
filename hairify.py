@@ -76,29 +76,37 @@ CONFIG = {
         "occlusion_vis": 0.75,           # bones with lower median visibility are clipped to the person mask
     },
     "creature": {                        # --creature strand (rubber hair)
-        "strand_count": 2200,            # total strands at --density 1.0
-        "segments": 8,                   # points per strand (6-10)
-        "hair_length": 0.5,              # strand length (W) at --hair-length 1.0
+        "strand_count": 1800,            # total strands at --density 1.0
+        "segments": 12,                  # points per strand
+        "hair_length": 0.65,             # strand length (W) at --hair-length 1.0
         "length_jitter": 0.3,
         "fan_out": 0.6,                  # 0 = strands follow the 3D surface normal, 1 = flattened
                                          # sideways so front strands fan out instead of facing the lens
+        "default_stiffness": 0.15,       # floppy: hangs and swings like hair / cooked spaghetti
     },
-    "physics": {                         # strand simulation (Verlet)
+    "physics": {                         # strand simulation (Verlet + dynamic follow-the-leader)
         "sim_rate": 120.0,               # physics steps/s, independent of the video fps
-        "gravity": 20.0,                 # W / s^2
-        "damping": 0.035,                # velocity loss per step
-        "stiffness": 0.5,                # default for --stiffness (0..1)
-        "k_min": 0.004,                  # spring pull per step at stiffness 0
-        "k_max": 0.22,                   # ... at stiffness 1
-        "tip_softness": 0.6,             # tips are this much softer than roots (whippier)
+        "gravity": 30.0,                 # W / s^2 (sets how fast hanging strands swing)
+        "damping_floppy": 0.006,         # velocity loss per step at stiffness 0 (low = keeps swinging)
+        "damping_stiff": 0.03,           # ... at stiffness 1
+        "k_shape_max": 0.22,             # pull to the straight rest pose at stiffness 1 (x stiffness^3)
+        "tip_softness": 0.6,             # tips are this much softer than roots
+        "follicle_points": 2,            # points near the root held in the skin direction
+        "k_follicle_min": 0.08,
+        "k_follicle_max": 0.4,
+        "k_bend_min": 0.12,              # smooth curves at stiffness 0
+        "k_bend_max": 0.3,
+        "ftl_damping": 0.9,              # dynamic follow-the-leader velocity correction (0..1)
+        "z_flatten": 0.04,               # per step, pull strand depth toward the root's (fewer
+                                         # foreshortened zigzags; 0 = full 3D)
     },
     "render": {                          # strand shading
         "color": "#ff3fa4",
         "root_darken": 0.55,             # root colour = base * (1 - root_darken)
         "tip_lighten": 0.30,
         "color_variation": 0.10,
-        "root_width": 0.026,             # W
-        "tip_width": 0.006,
+        "root_width": 0.022,             # W
+        "tip_width": 0.007,
         "light_dir": (-0.4, -0.7, 0.6),  # x right, y down, z away from camera
         "specular": 0.6,
         "shininess": 30.0,
@@ -110,7 +118,7 @@ CONFIG = {
         "segments": 10,
         "hair_length": 0.6,
         "length_jitter": 0.35,
-        "stiffness_scale": 1.25,
+        "default_stiffness": 0.45,
         "width": 0.006,                  # W
         "tip_size": 0.012,               # W
         "hue_spread": 45.0,              # degrees around --color
@@ -143,6 +151,7 @@ CONFIG = {
         "freq_min": 1.5,                 # spring frequency (Hz) at stiffness 0
         "freq_max": 7.0,                 # ... at stiffness 1
         "damping_ratio": 0.3,            # <1 = overshoot and jiggle
+        "default_stiffness": 0.5,
         "scatter_speed": 4.0,            # W / s per unit hit strength
         "scatter_radius": 0.8,           # W around the striking hand
         "glow": 0.8,
@@ -1090,6 +1099,11 @@ class Creature:
         self.rng = np.random.default_rng(seed)
         self.color = hex_to_bgr(args.color or self.default_color)
 
+    def stiffness(self, c: dict) -> float:
+        """--stiffness if given, else this creature's default; 0..1."""
+        v = self.args.stiffness if self.args.stiffness is not None else c.get("default_stiffness", 0.5)
+        return float(np.clip(v, 0, 1))
+
     def step(self, i: int):
         pass
 
@@ -1166,11 +1180,21 @@ class StrandCreature(Creature):
         self.L = (c["hair_length"] * args.hair_length * (1 + jit * (2 * rng.random(n) - 1))).astype(np.float32)
         self.var = rng.standard_normal((n, 3)).astype(np.float32)
         ph = CONFIG["physics"]
-        s = float(np.clip(args.stiffness, 0, 1)) * c.get("stiffness_scale", 1.0)
-        k = ph["k_min"] + (ph["k_max"] - ph["k_min"]) * min(s, 1.5) ** 2
+        s = self.stiffness(c)
+        # Three stiffness terms, all scaled by --stiffness:
+        #  shape:    pull toward the straight rest pose (spikes). ~0 when floppy.
+        #  follicle: keeps the first segments pointing out of the skin.
+        #  bend:     each segment continues the previous one -> smooth curves, no kinks.
+        k_shape = ph["k_shape_max"] * s ** 3
         prof = 1 - ph["tip_softness"] * np.arange(K) / (K - 1)
-        self.kprof = (k * prof).astype(np.float32)
-        self.kprof[0] = 0
+        kp = k_shape * prof
+        nf = ph["follicle_points"]
+        k_fol = ph["k_follicle_min"] + (ph["k_follicle_max"] - ph["k_follicle_min"]) * s
+        kp[1:1 + nf] = np.maximum(kp[1:1 + nf], k_fol * np.linspace(1, 0.5, nf))
+        kp[0] = 0
+        self.kprof = kp.astype(np.float32)
+        self.k_bend = float(ph["k_bend_min"] + (ph["k_bend_max"] - ph["k_bend_min"]) * s)
+        self.damping = float(ph["damping_floppy"] + (ph["damping_stiff"] - ph["damping_floppy"]) * s)
         self.dt = 1.0 / ph["sim_rate"]
         self.P = self.Pp = None
         self.acc = 0.0
@@ -1208,24 +1232,39 @@ class StrandCreature(Creature):
         n = max(1, int(self.acc / self.dt))
         self.acc -= n * self.dt
         g = ph["gravity"] * float(b.W[i]) * self.dt * self.dt
-        damp = 1.0 - ph["damping"]
+        damp = 1.0 - self.damping
+        kb, ftl, zf = self.k_bend, ph["ftl_damping"], ph["z_flatten"]
         r0, n0 = self.root, self.nrm
         P, Pp, kp = self.P, self.Pp, self.kprof[None, :, None]
+        seg_c = seg[:, None]
+        corr = np.zeros_like(P)
         for s in range(n):
             f = (s + 1) / n
             r = r0 + (root - r0) * f
             nn = n0 + (nrm - n0) * f
             nn /= np.linalg.norm(nn, axis=1, keepdims=True) + 1e-6
-            vel = (P - Pp) * damp
+            vel = (P - Pp) * damp                            # Verlet: inertia ...
             Pp = P
             P = P + vel
-            P[..., 1] += g
-            P += (self._rest(r, nn, seg) - P) * kp           # springy pull to rest shape
+            P[..., 1] += g                                   # ... gravity
+            if zf > 0:
+                P[:, 2:, 2] += (P[:, 1:2, 2] - P[:, 2:, 2]) * zf
+            P += (self._rest(r, nn, seg) - P) * kp           # shape + follicle springs
             P[:, 0] = r
-            for j in range(1, self.K):                       # segment lengths (follow the leader)
-                d = P[:, j] - P[:, j - 1]
+            prev_dir = self._rest_dir(nn)
+            for j in range(1, self.K):
+                if kb > 0 and j >= 2:                        # bending: continue previous segment
+                    P[:, j] += (P[:, j - 1] + prev_dir * seg_c - P[:, j]) * kb
+                d = P[:, j] - P[:, j - 1]                    # segment length (follow the leader)
                 ln = np.linalg.norm(d, axis=1, keepdims=True) + 1e-6
-                P[:, j] = P[:, j - 1] + d * (seg[:, None] / ln)
+                prev_dir = d / ln
+                new = P[:, j - 1] + prev_dir * seg_c
+                corr[:, j] = new - P[:, j]
+                P[:, j] = new
+            # Dynamic follow-the-leader (Mueller et al. 2012): hand each point's
+            # correction back to its parent's velocity so the chain keeps its energy
+            # and swings freely instead of being dragged dead by the constraint.
+            Pp[:, :-1] += ftl * corr[:, 1:]
             Pp[:, 0] = r
         self.P, self.Pp, self.root, self.nrm = P, Pp, root, nrm
 
@@ -1269,28 +1308,26 @@ class StrandCreature(Creature):
         hi = np.clip(col + rc["specular"] * 255 * spec[..., None], 0, 255)
         col = np.clip(col, 0, 255)
         widths = np.maximum(1, np.round((rc["root_width"] + (rc["tip_width"] - rc["root_width"]) * g[0, :, 0]) * W)).astype(int)
-        hw = np.maximum(1, widths // 3)
-        # Highlight offset: toward the light, perpendicular to the strand in 2D.
+        hw = max(1, int(round(widths[: (K - 1) // 2].mean() / 3)))
+        # Highlight: one continuous line per strand, offset toward the light, coloured by
+        # the strand's average specular term (per-segment dashes looked like a ladder).
         L2 = -np.asarray(rc["light_dir"][:2], np.float32)
-        perp = np.stack([-T[..., 1], T[..., 0]], -1)
-        sgn = np.sign((perp * -L2).sum(-1, keepdims=True) + 1e-6)
-        off = perp * sgn * (widths[None, :, None] * 0.25)
+        L2 /= np.linalg.norm(L2) + 1e-6
         pts = np.round(self.P[..., :2]).astype(np.int32)
-        hpts_a = np.round(self.P[:, :-1, :2] + off).astype(np.int32)
-        hpts_b = np.round(self.P[:, 1:, :2] + off).astype(np.int32)
+        hl_pts = np.round(self.P[:, :-1, :2] - L2 * (widths[None, :, None] * 0.28)).astype(np.int32)
+        spec_m = spec.mean(1)
+        hi_c = np.clip(col.mean(1) + rc["specular"] * 255 * spec_m[:, None], 0, 255)
         o_back, o_front = self._order(sel_s)
 
         def paint(order):
-            P_l, C_l, H_l = pts[order].tolist(), col[order].tolist(), hi[order].tolist()
-            S_l = spec[order].tolist()
-            A_l, B_l = hpts_a[order].tolist(), hpts_b[order].tolist()
-            wl, hl = widths.tolist(), hw.tolist()
-            for p, c, hc, sp, ha, hb in zip(P_l, C_l, H_l, S_l, A_l, B_l):
+            P_l, C_l = pts[order].tolist(), col[order].tolist()
+            wl = widths.tolist()
+            for p, c in zip(P_l, C_l):
                 for j in range(K - 1):
                     cv2.line(img, p[j], p[j + 1], c[j], wl[j], LINE)
-                for j in range(K - 1):
-                    if sp[j] > 0.3 and abs(ha[j][0] - hb[j][0]) + abs(ha[j][1] - hb[j][1]) > 2 * wl[j]:
-                        cv2.line(img, ha[j], hb[j], hc[j], hl[j], LINE)
+            glossy = order[spec_m[order] > 0.2]
+            for k in glossy.tolist():
+                cv2.polylines(img, [hl_pts[k]], False, hi_c[k].tolist(), hw, LINE)
 
         paint(o_back)
         core = np.clip(base * (1 - rc["root_darken"]) * rc["core_darkness"], 0, 255)
@@ -1532,7 +1569,7 @@ class SwarmCreature(Creature):
         hue = h + c["hue_spread"] * rng.uniform(-1, 1, n)
         self.col = hsv_deg_to_bgr(hue, np.clip(s * rng.uniform(0.8, 1.1, n), 0, 1),
                                   np.clip(v * rng.uniform(0.65, 1.05, n), 0, 1))
-        stiff = float(np.clip(self.args.stiffness, 0, 1))
+        stiff = self.stiffness(c)
         f_hz = c["freq_min"] + (c["freq_max"] - c["freq_min"]) * stiff
         self.omega = (2 * np.pi * f_hz * rng.uniform(0.8, 1.2, n)).astype(np.float32)
         self.zeta = c["damping_ratio"]
@@ -1762,8 +1799,8 @@ def parse_args(argv=None):
                    help="background colour grade (auto: cyber for fiber/circuit/vowels)")
     p.add_argument("--hair-length", type=float, default=1.0,
                    help="strand length / trace length / cube size multiplier (default 1.0)")
-    p.add_argument("--stiffness", type=float, default=CONFIG["physics"]["stiffness"],
-                   help="0 = floppy, 1 = stiff spikes (default %(default)s)")
+    p.add_argument("--stiffness", type=float, default=None,
+                   help="0 = floppy hair / cooked spaghetti, 1 = stiff spikes (default per creature)")
     p.add_argument("--density", type=float, default=1.0,
                    help="strand / trace / particle count multiplier (default 1.0)")
     p.add_argument("--preview", action="store_true",
@@ -1820,7 +1857,6 @@ def main(argv=None):
     if not args.input.exists():
         sys.exit(f"error: {args.input} not found")
     CONFIG["pose"]["model"] = args.model
-    CONFIG["physics"]["stiffness"] = float(np.clip(args.stiffness, 0, 1))
 
     info = probe_video(args.input)
     fps = float(info.fps)
