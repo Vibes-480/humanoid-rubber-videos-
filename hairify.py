@@ -86,9 +86,10 @@ CONFIG = {
                         "forearm_l": 0.4, "forearm_r": 0.4, "hand_l": 0.25, "hand_r": 0.25,
                         "thigh_l": 0.7, "thigh_r": 0.7, "shin_l": 0.55, "shin_r": 0.55,
                         "foot_l": 0.3, "foot_r": 0.3},
-        "core_brightness": 0.55,         # core body colour = base colour * this (shaded)
-        "arm_brightness": 1.25,          # arms in front of the body are lit brighter ...
-        "arm_shadow": 0.55,              # ... and cast a soft shadow on the torso (0..1)
+        # The body itself stays invisible: only a flat fill in the strands' root colour,
+        # shrunk inside the strands, closes gaps so the figure is implied by the strands.
+        "core_shrink": 0.0,              # fill size relative to the body capsules (0 = none)
+        "arm_brightness": 1.12,          # strands of arms in front of the body, slightly lit
         "length_jitter": 0.3,
         "fan_out": 0.6,                  # 0 = strands follow the 3D surface normal, 1 = flattened
                                          # sideways so front strands fan out instead of facing the lens
@@ -120,7 +121,6 @@ CONFIG = {
         "light_dir": (-0.4, -0.7, 0.6),  # x right, y down, z away from camera
         "specular": 0.6,
         "shininess": 30.0,
-        "core_darkness": 0.9,            # core body colour = root colour * this
         "shadow_opacity": 0.45,
     },
     "fiber": {                           # --creature fiber (fiber-optic neon)
@@ -1361,19 +1361,17 @@ class StrandCreature(Creature):
         front_arms = self.arms_in_front(i) & sel
         o_back = o_back[~front_arms[self.bones[o_back]]]
         paint(o_back)
-        core = np.clip(base * CONFIG["creature"]["core_brightness"], 0, 255)
-        self.draw_core(img, i, sel & ~front_arms, core, shrink=1.0, shade=True)
+        cc = CONFIG["creature"]
+        core = np.clip(root_c, 0, 255)
+        if cc["core_shrink"] > 0:
+            self.draw_core(img, i, sel & ~front_arms, core, shrink=cc["core_shrink"])
         is_arm = front_arms[self.bones[o_front]]
         paint(o_front[~is_arm])
         if front_arms.any():
-            cc = CONFIG["creature"]
             arm_o = np.flatnonzero(sel_s & front_arms[self.bones])
             arm_o = arm_o[np.argsort(-self.P[arm_o, :, 2].mean(1))]
-            # Soft shadow of the arms on the body behind them separates pink from pink.
-            self.draw_core(img, i, front_arms, (0, 0, 0), shrink=1.0 + self.L.mean() * 1.2,
-                           opacity=cc["arm_shadow"], blur=0.12)
-            self.draw_core(img, i, front_arms, np.clip(core * cc["arm_brightness"], 0, 255),
-                           shrink=1.0, shade=True)
+            if cc["core_shrink"] > 0:
+                self.draw_core(img, i, front_arms, core, shrink=cc["core_shrink"])
             paint(arm_o, cc["arm_brightness"])
 
 

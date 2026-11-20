@@ -76,7 +76,7 @@ encoder settings) are in the `CONFIG` dict at the top of `hairify.py`.
 
 | `--creature` | Default colour | What it is |
 |---|---|---|
-| `strand` | `#ff3fa4` | Rubbery strands on the body capsules that hang, swing and flop like hair or cooked spaghetti (raise `--stiffness` for wobbly spikes). Glossy shading (dark roots, light tips, specular highlight), dark core body underneath. |
+| `strand` | `#ff3fa4` | Rubbery strands on the body capsules that hang, swing and flop like hair or cooked spaghetti (raise `--stiffness` for wobbly spikes). Glossy shading (dark roots, light tips, specular highlight). The body itself is invisible: its shape is implied by where the strands grow (set `core_shrink` > 0 for a fill under the strands). |
 | `fiber` | `#00e5ff` | Same physics; dark fibers with glowing, colour-shifting tips and light pulses running root→tip on every drum hit. Bloom. |
 | `circuit` | `#19f0ff` | Shaded dark body covered in PCB traces, vias and chips; light pulses run along the traces, in bursts on drum hits. |
 | `swarm` | `#ff3fa4` | Thousands of shaded cubes sprung to points inside the body. Fast moves make them trail; drum hits blast them away from the striking hand. |
