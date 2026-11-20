@@ -135,6 +135,7 @@ class VideoInfo:
     n_frames: int
     duration: float
     has_audio: bool
+    audio_codec: str | None = None
 
 
 def probe_video(path: Path) -> VideoInfo:
@@ -162,8 +163,9 @@ def probe_video(path: Path) -> VideoInfo:
     h, w = frame.shape[:2]
     if n <= 0:
         n = int(round(duration * float(fps)))
-    return VideoInfo(path, w, h, fps, n, duration,
-                     any(s["codec_type"] == "audio" for s in meta["streams"]))
+    astreams = [s for s in meta["streams"] if s["codec_type"] == "audio"]
+    return VideoInfo(path, w, h, fps, n, duration, bool(astreams),
+                     astreams[0].get("codec_name") if astreams else None)
 
 
 def iter_frames(path: Path, max_frames: int | None = None):
@@ -184,7 +186,8 @@ class FFmpegWriter:
     """Pipes raw BGR frames into ffmpeg, muxing the original audio in one go."""
 
     def __init__(self, out_path: Path, width: int, height: int, fps: Fraction,
-                 audio_src: Path | None, duration: float | None, enc: dict):
+                 audio_src: Path | None, duration: float | None, enc: dict,
+                 audio_codec: str | None = None):
         self.out_path = out_path
         cmd = ["ffmpeg", "-v", "error", "-y",
                "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{width}x{height}",
@@ -192,8 +195,12 @@ class FFmpegWriter:
         if audio_src is not None:
             if duration is not None:
                 cmd += ["-t", f"{duration:.3f}"]
-            cmd += ["-i", str(audio_src), "-map", "0:v:0", "-map", "1:a:0?",
-                    "-c:a", enc["audio_codec"], "-b:a", enc["audio_bitrate"], "-shortest"]
+            cmd += ["-i", str(audio_src), "-map", "0:v:0", "-map", "1:a:0?"]
+            # MP4-compatible audio is copied bit-exact; trimmed previews re-encode so the cut is exact.
+            if duration is None and audio_codec in ("aac", "mp3", "alac"):
+                cmd += ["-c:a", "copy"]
+            else:
+                cmd += ["-c:a", enc["audio_codec"], "-b:a", enc["audio_bitrate"]]
         cmd += ["-c:v", "libx264", "-crf", str(enc["crf"]), "-preset", enc["preset"],
                 "-pix_fmt", enc["pix_fmt"], "-movflags", "+faststart", str(out_path)]
         self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
@@ -509,7 +516,8 @@ def main(argv=None):
 
     # --- Render -------------------------------------------------------------
     writer = FFmpegWriter(args.output, out_w, out_h, info.fps,
-                          info.path if info.has_audio else None, out_duration, CONFIG["encode"])
+                          info.path if info.has_audio else None, out_duration, CONFIG["encode"],
+                          info.audio_codec)
     for i, frame in tqdm(iter_frames(info.path, n_frames), total=n_frames, desc="rendering", unit="f"):
         writer.write(draw_skeleton(frame, pose, i))
     writer.close()
