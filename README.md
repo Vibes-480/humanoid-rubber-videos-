@@ -3,8 +3,8 @@
 Replace the person in a short video with a CGI creature made of rubbery, jiggling
 hair/spike strands, in the spirit of Method Studios' "AICP 2016 Sponsor Reel".
 
-> **Status:** stage (a) pose tracking + skeleton overlay is done. Person removal (b)
-> and the creature (c) come next. Until then, use `--stage skeleton`.
+> **Status:** stages (a) pose tracking and (b) person removal are done. The creature (c)
+> comes next. Until then, use `--stage skeleton` or `--stage background`.
 
 ## Setup
 
@@ -35,11 +35,14 @@ On headless Linux, MediaPipe also needs the EGL/GLES libraries (it uses them eve
 
 # debug videos for each stage
 .venv/bin/python hairify.py input.mp4 --preview --stage skeleton
+.venv/bin/python hairify.py input.mp4 --preview --stage background
 ```
 
 The output has the same resolution, fps and length as the input, with the original audio
-(H.264, CRF 18, preset veryfast, yuv420p). Pose tracking is cached in `.hairify_cache/`, so
-re-rendering the same clip with different look settings skips the slow part.
+(H.264, CRF 18, preset veryfast, yuv420p; AAC/MP3 audio is copied untouched). Pose tracking,
+segmentation and the background plate are cached in `.hairify_cache/`, so re-rendering the
+same clip with different look settings skips the slow parts. Delete that folder (or pass
+`--no-cache`) to start over.
 
 ## Options
 
@@ -66,6 +69,35 @@ encoder settings) are in the `CONFIG` dict at the top of `hairify.py`.
   (orange = left side, blue = right side)
 - joint colour: green = visible, red = occluded; joint size grows as the joint gets closer to the camera (z)
 - top-left label: `DETECTED`, `INTERPOLATED` (short gap, filled), or `LOST` (creature faded out)
+
+## Person removal (`--stage background`)
+
+1. **Segmentation**: MediaPipe `selfie_multiclass_256x256` gives a person probability mask per
+   frame. Only the frames that are rendered plus the plate samples are segmented, and the
+   results are cached per frame, so a first `--preview` on a new clip stays quick.
+2. **Camera motion**: ORB features on the background (person masked out) are matched to frame 0
+   and a similarity transform is fitted with RANSAC. If the 95th-percentile shift is under
+   `static_threshold_px` the camera is treated as static; otherwise the plate is aligned to
+   every frame, and frames that cannot be aligned fall back to inpainting.
+3. **Background plate**: per-pixel median over `plate_samples` frames, ignoring masked pixels.
+   Pixels seen in less than `plate_min_coverage` of the samples (e.g. behind someone who never
+   moves) are inpainted once, so the fill is stable over time. It is saved as `<output>_plate.png`.
+4. **Compositing**: the mask is maxed over ±`temporal_dilate` frames (covers motion blur),
+   dilated, feathered, and the plate is blended in, with a per-channel gain that tracks the
+   camera's auto-exposure.
+
+### Inpainters
+
+`CONFIG["removal"]["inpainter"]` picks a function from the `INPAINTERS` dict:
+
+| Name | Notes |
+|---|---|
+| `rows` (default) | Blends each row between the colours left and right of the hole, then smooths vertically. Best for person-shaped holes; does not smear things below the person (floor, tables) upwards. |
+| `pyramid` | OpenCV Telea at low resolution, upsampled. Smooth, but radial streaks on large holes. |
+| `telea` | OpenCV Telea at full resolution. |
+
+To plug in a better one (e.g. LaMa), add a function `fn(bgr_uint8, mask_uint8, radius) -> bgr_uint8`
+to `INPAINTERS` and select it in the config.
 
 ## How tracking handles dropouts
 

@@ -54,12 +54,19 @@ CONFIG = {
         "fade_s": 0.35,                  # fade-out/in time when tracking is lost/regained
     },
     "removal": {
-        "mask_threshold": 0.35,
-        "dilate_px": 0.02,               # fraction of frame height
-        "feather_px": 0.015,
+        "analysis_height": 270,          # masks / motion are computed and cached at this height
+        "mask_threshold": 0.35,          # person probability above which a pixel is removed
+        "temporal_dilate": 1,            # also remove where the person was +-N frames ago (motion blur)
+        "dilate_px": 0.02,               # mask grow, fraction of frame height
+        "feather_px": 0.015,             # mask edge softness, fraction of frame height
         "plate_samples": 60,             # frames sampled for the median background plate
-        "plate_min_coverage": 3,         # min unmasked samples per pixel, else inpaint
+        "plate_min_coverage": 0.25,      # fraction of samples a pixel must be seen in, else inpaint
+        "inpainter": "rows",             # key in INPAINTERS (rows | pyramid | telea | your own)
         "inpaint_radius": 5,
+        "color_match": True,             # match plate exposure to each frame (auto-exposure drift)
+        "static_threshold_px": 3.0,      # camera shift below this counts as static
+        "warp_smooth_frames": 5,         # temporal smoothing of camera motion estimates
+        "min_inliers": 25,               # background feature matches needed to align a frame
     },
     "creature": {
         "strand_count": 3000,            # total strands at --density 1.0
@@ -409,6 +416,400 @@ def smooth_pose(track: PoseTrack, fps: float, cfg: dict, height: int) -> SmoothP
 
 
 # =============================================================================
+# Stage 2: person removal
+# =============================================================================
+SEG_MODEL_URL = ("https://storage.googleapis.com/mediapipe-models/image_segmenter/"
+                 "selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite")
+
+
+def _cache_path(cache_dir: Path, kind: str, info: VideoInfo, n_frames: int, cfg) -> Path:
+    st = info.path.stat()
+    key = hashlib.sha1(json.dumps([str(info.path.resolve()), st.st_size, st.st_mtime_ns,
+                                   n_frames, cfg], sort_keys=True).encode()).hexdigest()[:16]
+    return cache_dir / f"{kind}_{info.path.stem}_{key}.npz"
+
+
+# --- Inpainters ---------------------------------------------------------------
+# An inpainter is any function (bgr_uint8_image, mask_uint8) -> bgr_uint8_image that
+# fills the pixels where mask > 0. Register a better one (e.g. LaMa) here and select
+# it with CONFIG["removal"]["inpainter"].
+def inpaint_telea(img: np.ndarray, mask: np.ndarray, radius: int = 5) -> np.ndarray:
+    return cv2.inpaint(img, (mask > 0).astype(np.uint8), radius, cv2.INPAINT_TELEA)
+
+
+def inpaint_pyramid(img: np.ndarray, mask: np.ndarray, radius: int = 5) -> np.ndarray:
+    """Telea at low resolution, upsampled into the hole. Large holes come out as smooth,
+    plausible gradients instead of the streaks full-res Telea produces, and it is fast."""
+    h, w = mask.shape[:2]
+    hole = (mask > 0).astype(np.uint8)
+    if not hole.any():
+        return img.copy()
+    scale = min(1.0, 400.0 / max(h, w))
+    sw, sh = max(8, int(w * scale)), max(8, int(h * scale))
+    small = cv2.resize(img, (sw, sh), interpolation=cv2.INTER_AREA)
+    small_hole = (cv2.resize(hole, (sw, sh), interpolation=cv2.INTER_AREA) > 0).astype(np.uint8)
+    small_hole = cv2.dilate(small_hole, np.ones((3, 3), np.uint8))
+    filled = cv2.inpaint(small, small_hole, radius, cv2.INPAINT_TELEA)
+    filled = cv2.GaussianBlur(filled, (0, 0), 1.0)
+    up = cv2.resize(filled, (w, h), interpolation=cv2.INTER_CUBIC)
+    # Feather the seam so the low-res fill blends into the full-res surroundings.
+    soft = cv2.GaussianBlur(hole.astype(np.float32), (0, 0), max(1.0, 2.0 / scale))
+    soft = np.maximum(soft, hole.astype(np.float32))[..., None]
+    return (img * (1 - soft) + up * soft).astype(np.uint8)
+
+
+def inpaint_rows(img: np.ndarray, mask: np.ndarray, radius: int = 5) -> np.ndarray:
+    """Fill each row of the hole by blending between the background colours just left and
+    right of it, then smooth vertically. Person-shaped holes are tall and narrow, so the
+    horizontal direction is the short one; this also stops foreground objects below the
+    person (a table, a drum pad) from bleeding upwards the way radial inpainters do."""
+    hole = mask > 0
+    if not hole.any():
+        return img.copy()
+    h, w = hole.shape
+    k = max(3, 2 * radius)                       # boundary pixels averaged on each side
+    out = img.astype(np.float32)
+    filled = np.zeros(h, bool)
+    for y in np.flatnonzero(hole.any(axis=1)):
+        r = np.concatenate([[0], hole[y].astype(np.int8), [0]])
+        starts, ends = np.flatnonzero(np.diff(r) == 1), np.flatnonzero(np.diff(r) == -1)
+        for a, b in zip(starts, ends):
+            left = np.median(out[y, max(0, a - k):a], axis=0) if a > 0 else None
+            right = np.median(out[y, b:min(w, b + k)], axis=0) if b < w else None
+            if left is None and right is None:
+                continue
+            left = right if left is None else left
+            right = left if right is None else right
+            t = np.linspace(0, 1, b - a + 2)[1:-1, None]
+            out[y, a:b] = left * (1 - t) + right * t
+        filled[y] = True
+    # Rows that are hole from edge to edge: copy the nearest filled row.
+    empty = hole.all(axis=1) | ~filled & hole.any(axis=1)
+    if empty.any() and filled.any():
+        src = np.flatnonzero(~empty)
+        near = src[np.abs(src[None, :] - np.flatnonzero(empty)[:, None]).argmin(axis=1)]
+        out[empty] = out[near]
+    # Vertical smoothing removes row-to-row streaks; composite only inside the hole.
+    sm = cv2.GaussianBlur(out, (0, 0), sigmaX=max(1.0, 0.004 * w), sigmaY=max(2.0, 0.03 * h))
+    soft = cv2.GaussianBlur(hole.astype(np.float32), (0, 0), max(1.0, 0.004 * h))
+    soft = np.maximum(soft, cv2.erode(hole.astype(np.uint8), np.ones((5, 5), np.uint8)))[..., None]
+    res = np.where(hole[..., None], sm, out)
+    return np.clip(img * (1 - soft) + res * soft, 0, 255).astype(np.uint8)
+
+
+INPAINTERS = {"rows": inpaint_rows, "telea": inpaint_telea, "pyramid": inpaint_pyramid}
+
+
+# --- Analysis pass: masks + camera motion --------------------------------------
+@dataclass
+class SceneAnalysis:
+    masks: np.ndarray      # [N,h,w] uint8 person probability (0..255) at analysis resolution
+    have: np.ndarray       # [N] bool, frame has been analysed (analysis is incremental)
+    warps: np.ndarray      # [N,3,3] full-res transform frame -> reference frame (frame 0)
+    aligned: np.ndarray    # [N] bool, warp is trustworthy
+    static: bool           # camera considered static (all warps = identity)
+
+
+def ensure_seg_model(model_dir: Path) -> Path:
+    path = model_dir / "selfie_multiclass_256x256.tflite"
+    if not path.exists():
+        import urllib.request
+        model_dir.mkdir(parents=True, exist_ok=True)
+        print("downloading segmentation model ...")
+        urllib.request.urlretrieve(SEG_MODEL_URL, path)
+    return path
+
+
+def plate_sample_frames(n_total: int, cfg: dict) -> np.ndarray:
+    k = min(cfg["plate_samples"], n_total)
+    return np.unique(np.linspace(0, n_total - 1, k).round().astype(int))
+
+
+def analyze_scene(info: VideoInfo, sc: SceneAnalysis, need: np.ndarray, cfg: dict) -> int:
+    """Segment the person and estimate camera motion for frames in `need` that are not
+    analysed yet (in place). Frame 0 is always analysed: it is the motion reference."""
+    import mediapipe as mp
+    from mediapipe.tasks.python import vision
+    from mediapipe.tasks.python.core.base_options import BaseOptions
+
+    todo = need & ~sc.have
+    todo[0] = not sc.have[0]
+    if not todo.any():
+        return 0
+    model = ensure_seg_model(Path(CONFIG["pose"]["model_dir"]))
+    opts = vision.ImageSegmenterOptions(base_options=BaseOptions(model_asset_path=str(model)),
+                                        output_confidence_masks=True)
+    ah, aw = sc.masks.shape[1:]
+    s = info.width / aw                                     # analysis -> full-res scale
+    S, S_inv = np.diag([s, s, 1.0]), np.diag([1 / s, 1 / s, 1.0])
+    orb = cv2.ORB_create(1500)
+    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+    excl = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
+    ref = None
+    last = int(np.flatnonzero(todo).max())
+    cap = cv2.VideoCapture(str(info.path))
+    bar = tqdm(total=int(todo.sum()), desc="segmenting", unit="f")
+    with vision.ImageSegmenter.create_from_options(opts) as seg:
+        for i in range(last + 1):
+            if not (todo[i] or (i == 0 and ref is None)):
+                if not cap.grab():                          # skip without decoding
+                    break
+                continue
+            ok, frame = cap.read()
+            if not ok:
+                break
+            small = cv2.resize(frame, (aw, ah), interpolation=cv2.INTER_AREA)
+            if todo[i]:
+                res = seg.segment(mp.Image(image_format=mp.ImageFormat.SRGB,
+                                           data=cv2.cvtColor(small, cv2.COLOR_BGR2RGB)))
+                bg = np.squeeze(res.confidence_masks[0].numpy_view())  # category 0 = background
+                sc.masks[i] = np.clip((1.0 - bg) * 255, 0, 255).astype(np.uint8)
+            # Camera motion: match background features against frame 0.
+            gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+            fmask = np.where(cv2.dilate(sc.masks[i], excl) > 64, 0, 255).astype(np.uint8)
+            kp, des = orb.detectAndCompute(gray, fmask)
+            if i == 0:
+                ref = (kp, des)
+                sc.warps[0], sc.aligned[0] = np.eye(3), True
+            else:
+                ok = False
+                if des is not None and ref[1] is not None and len(kp) >= 10:
+                    m = bf.match(des, ref[1])
+                    if len(m) >= cfg["min_inliers"]:
+                        src = np.float32([kp[x.queryIdx].pt for x in m])
+                        dst = np.float32([ref[0][x.trainIdx].pt for x in m])
+                        A, inl = cv2.estimateAffinePartial2D(src, dst, method=cv2.RANSAC,
+                                                             ransacReprojThreshold=2.0)
+                        if A is not None and inl is not None and inl.sum() >= cfg["min_inliers"]:
+                            sc.warps[i] = S @ np.vstack([A, [0, 0, 1]]) @ S_inv
+                            ok = True
+                sc.aligned[i] = ok
+            if todo[i]:
+                sc.have[i] = True
+                bar.update(1)
+    bar.close()
+    cap.release()
+    return int(todo.sum())
+
+
+def finalize_motion(sc: SceneAnalysis, cfg: dict, width: int, height: int) -> SceneAnalysis:
+    """Smooth the raw per-frame camera motion and decide whether the camera is static."""
+    warps, aligned = sc.warps.copy(), sc.aligned & sc.have
+    # Smooth the estimates over time (moving average of the affine parameters over
+    # consecutive analysed frames) so estimation noise does not make the fill jitter.
+    ks = cfg["warp_smooth_frames"]
+    if ks > 1 and aligned.sum() > ks:
+        idx = np.flatnonzero(aligned)
+        p = warps[idx][:, :2].reshape(len(idx), -1)
+        pad = np.pad(p, ((ks // 2, ks // 2), (0, 0)), mode="edge")
+        p = np.stack([np.convolve(pad[:, c], np.ones(ks) / ks, "valid") for c in range(6)], 1)
+        warps[idx, :2] = p.reshape(-1, 2, 3)
+    # Static camera: frame-corner displacement stays under the threshold.
+    corners = np.array([[0, 0, 1], [width, 0, 1], [0, height, 1], [width, height, 1]], float).T
+    disp = np.abs(np.einsum("nij,jk->nik", warps, corners)[:, :2] - corners[:2]).max(axis=(1, 2))
+    p95 = float(np.percentile(disp[aligned], 95)) if aligned.any() else 0.0
+    static = p95 < cfg["static_threshold_px"]
+    n_bad = int((sc.have & ~sc.aligned).sum())
+    print(f"camera: {'static' if static else 'moving'} (95th pct shift {p95:.2f}px, "
+          f"{n_bad} frames could not be aligned)")
+    if static:
+        warps[:] = np.eye(3)
+        aligned = sc.have.copy()
+    return SceneAnalysis(sc.masks, sc.have, warps, aligned, static)
+
+
+def cached_scene(info: VideoInfo, need: np.ndarray, cfg: dict, cache_dir: Path,
+                 use_cache: bool = True) -> SceneAnalysis:
+    """Incremental, cached scene analysis: only frames in `need` that were never analysed
+    are processed, so a --preview run costs ~preview length + plate samples."""
+    n = len(need)
+    keycfg = {k: cfg[k] for k in ("analysis_height", "min_inliers")}
+    path = _cache_path(cache_dir, "scene", info, n, keycfg)
+    ah = cfg["analysis_height"]
+    aw = int(round(info.width * ah / info.height))
+    if use_cache and path.exists():
+        d = np.load(path)
+        sc = SceneAnalysis(d["masks"], d["have"], d["warps"], d["aligned"], False)
+    else:
+        sc = SceneAnalysis(np.zeros((n, ah, aw), np.uint8), np.zeros(n, bool),
+                           np.tile(np.eye(3), (n, 1, 1)), np.zeros(n, bool), False)
+    done = analyze_scene(info, sc, need, cfg)
+    if done:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(path, masks=sc.masks, have=sc.have, warps=sc.warps, aligned=sc.aligned)
+    else:
+        print(f"using cached scene analysis: {path.name}")
+    return finalize_motion(sc, cfg, info.width, info.height)
+
+
+# --- Masks ----------------------------------------------------------------------
+def person_mask(scene: SceneAnalysis, i: int, size: tuple[int, int], cfg: dict) -> np.ndarray:
+    """Soft person mask (float32 0..1) at `size`: temporal max over analysed neighbours,
+    threshold, dilate, feather. Morphology runs at <=540p and is upsampled."""
+    w, h = size
+    t = cfg["temporal_dilate"]
+    lo, hi = max(0, i - t), min(len(scene.masks), i + t + 1)
+    nb = [j for j in range(lo, hi) if scene.have[j]] or [i]
+    m = scene.masks[nb].max(axis=0)                 # covers motion blur and flicker
+    ws = min(1.0, 540 / h)
+    mw, mh = int(w * ws), int(h * ws)
+    m = cv2.resize(m, (mw, mh), interpolation=cv2.INTER_LINEAR)
+    hard = (m > cfg["mask_threshold"] * 255).astype(np.uint8)
+    d = max(1, int(cfg["dilate_px"] * mh))
+    hard = cv2.dilate(hard, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * d + 1, 2 * d + 1)))
+    f = max(1.0, cfg["feather_px"] * mh)
+    soft = cv2.GaussianBlur(hard.astype(np.float32), (0, 0), f / 2)
+    soft = np.maximum(soft, cv2.erode(hard, np.ones((3, 3), np.uint8)).astype(np.float32))
+    if (mw, mh) != (w, h):
+        soft = cv2.resize(soft, (w, h), interpolation=cv2.INTER_LINEAR)
+    return soft
+
+
+# --- Background plate ------------------------------------------------------------
+@dataclass
+class Plate:
+    image: np.ndarray      # [H,W,3] uint8, reference-frame coordinates, holes filled
+    raw: np.ndarray        # [H,W,3] uint8, median before hole filling
+    seen: np.ndarray       # [H,W] uint8 255 where the real background was observed
+    coverage: np.ndarray   # [H,W] int number of unmasked samples
+
+
+def build_plate(info: VideoInfo, n_frames: int, scene: SceneAnalysis, cfg: dict) -> Plate:
+    pick = [i for i in plate_sample_frames(n_frames, cfg) if scene.have[i] and scene.aligned[i]]
+    W, H = info.width, info.height
+    stack = np.zeros((len(pick), H, W, 3), np.uint8)
+    valid = np.zeros((len(pick), H, W), bool)
+    j = 0
+    cap = cv2.VideoCapture(str(info.path))
+    pos = 0
+    for i in tqdm(pick, desc="building plate", unit="f"):
+        while pos < i:                                  # grab() skips without decoding
+            cap.grab(); pos += 1
+        ok, frame = cap.read(); pos += 1
+        if not ok:
+            break
+        m = person_mask(scene, i, (W, H), cfg) < 0.01
+        if not scene.static:
+            A = scene.warps[i][:2]
+            frame = cv2.warpAffine(frame, A, (W, H), flags=cv2.INTER_LINEAR)
+            m = cv2.warpAffine(m.astype(np.uint8), A, (W, H), flags=cv2.INTER_NEAREST,
+                               borderValue=0).astype(bool)
+        stack[j], valid[j] = frame, m
+        j += 1
+    cap.release()
+    stack, valid = stack[:j], valid[:j]
+    coverage = valid.sum(axis=0)
+    # Masked median: invalid samples get a sentinel above any pixel value, then after a
+    # sort along the sample axis the median of the valid ones sits at index (count-1)//2.
+    plate = np.zeros((H, W, 3), np.uint8)
+    rows = 128
+    for y in range(0, H, rows):
+        v = valid[:, y:y + rows]
+        st = stack[:, y:y + rows].astype(np.uint16)
+        st[~v] = 1000
+        st.sort(axis=0)
+        mid = ((np.maximum(coverage[y:y + rows], 1) - 1) // 2)[None, ..., None]
+        plate[y:y + rows] = np.take_along_axis(st, np.broadcast_to(mid, (1,) + st.shape[1:]), 0)[0].clip(0, 255)
+    hole = (coverage < max(3, cfg["plate_min_coverage"] * j)).astype(np.uint8) * 255
+    pct = 100.0 * (hole > 0).mean()
+    print(f"plate: {j} samples, {pct:.1f}% of the frame never seen -> inpainted ({cfg['inpainter']})")
+    raw = plate.copy()
+    if hole.any():
+        plate = INPAINTERS[cfg["inpainter"]](plate, hole, cfg["inpaint_radius"])
+    return Plate(plate, raw, 255 - hole, coverage)
+
+
+def cached_plate(info: VideoInfo, scene: SceneAnalysis, cfg: dict, cache_dir: Path,
+                 use_cache: bool = True) -> Plate:
+    keycfg = {k: cfg[k] for k in ("analysis_height", "min_inliers", "mask_threshold",
+                                  "temporal_dilate", "dilate_px", "feather_px", "plate_samples",
+                                  "plate_min_coverage", "inpainter", "inpaint_radius",
+                                  "static_threshold_px", "warp_smooth_frames")}
+    keycfg["static"] = scene.static
+    path = _cache_path(cache_dir, "plate", info, len(scene.masks), keycfg)
+    if use_cache and path.exists():
+        print(f"using cached background plate: {path.name}")
+        d = np.load(path)
+        return Plate(d["image"], d["raw"], d["seen"], d["coverage"])
+    plate = build_plate(info, len(scene.masks), scene, cfg)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(path, image=plate.image, raw=plate.raw, seen=plate.seen, coverage=plate.coverage)
+    return plate
+
+
+# --- Per-frame removal --------------------------------------------------------------
+class PersonRemover:
+    """Per-frame person removal: fill the masked area from the (aligned) background plate,
+    falling back to inpainting where the plate cannot help."""
+
+    def __init__(self, scene: SceneAnalysis, plate: Plate, cfg: dict, scale: float = 1.0):
+        """`scale` < 1 processes frames at reduced size (frames must be resized to match)."""
+        self.cfg = cfg
+        self.gain = None                                  # smoothed exposure gain (per channel)
+        if scale != 1.0:
+            ph, pw = plate.image.shape[:2]
+            size = (int(round(pw * scale / 2) * 2), int(round(ph * scale / 2) * 2))
+            sx, sy = size[0] / pw, size[1] / ph
+            S, S_inv = np.diag([sx, sy, 1.0]), np.diag([1 / sx, 1 / sy, 1.0])
+            plate = Plate(cv2.resize(plate.image, size, interpolation=cv2.INTER_AREA),
+                          plate.raw, plate.seen, plate.coverage)
+            scene = SceneAnalysis(scene.masks, scene.have, S @ scene.warps @ S_inv,
+                                  scene.aligned, scene.static)
+        self.scene, self.plate = scene, plate
+
+    def _match_exposure(self, frame, fill, soft):
+        # Per-channel gain measured in a ring of real background just outside the mask,
+        # at quarter resolution, smoothed over time so it cannot flicker.
+        h, w = frame.shape[:2]
+        q = (max(8, w // 4), max(8, h // 4))
+        fs, ps = cv2.resize(frame, q, interpolation=cv2.INTER_AREA), cv2.resize(fill, q, interpolation=cv2.INTER_AREA)
+        ms = cv2.resize(soft, q, interpolation=cv2.INTER_LINEAR) > 0
+        r = max(3, int(0.03 * q[1]))
+        ring = (cv2.dilate(ms.astype(np.uint8), np.ones((r, r), np.uint8)) > 0) & ~ms
+        if ring.sum() < 50:
+            return fill
+        g = np.median(fs[ring].astype(np.float32), 0) / np.maximum(np.median(ps[ring].astype(np.float32), 0), 1)
+        g = np.clip(g, 0.8, 1.25)
+        self.gain = g if self.gain is None else 0.85 * self.gain + 0.15 * g
+        if np.abs(self.gain - 1).max() < 0.005:
+            return fill
+        return cv2.convertScaleAbs(fill.astype(np.float32) * self.gain.astype(np.float32))
+
+    def __call__(self, frame: np.ndarray, i: int) -> np.ndarray:
+        scene, cfg = self.scene, self.cfg
+        h, w = frame.shape[:2]
+        soft = person_mask(scene, i, (w, h), cfg)
+        x, y, bw, bh = cv2.boundingRect((soft > 0).astype(np.uint8))
+        if bw == 0:
+            return frame
+        if scene.static:
+            fill, fill_ok = self.plate.image, None
+        elif scene.aligned[i]:
+            A_inv = cv2.invertAffineTransform(scene.warps[i][:2])
+            fill = cv2.warpAffine(self.plate.image, A_inv, (w, h), flags=cv2.INTER_LINEAR)
+            fill_ok = cv2.warpAffine(np.full((h, w), 255, np.uint8), A_inv, (w, h),
+                                     flags=cv2.INTER_NEAREST, borderValue=0)
+        else:
+            fill, fill_ok = None, None
+        if fill is None or (fill_ok is not None and (fill_ok[soft > 0] == 0).any()):
+            # Camera moved too much to align, or the warped plate does not reach this area.
+            hole = (soft > 0).astype(np.uint8) * 255
+            if fill is not None:
+                hole[fill_ok > 0] = 0
+                src = np.where(fill_ok[..., None] > 0, fill, frame)
+            else:
+                src = frame
+            fill = INPAINTERS[cfg["inpainter"]](src, hole, cfg["inpaint_radius"])
+        elif cfg["color_match"]:
+            fill = self._match_exposure(frame, fill, soft)
+        out = frame.copy()
+        sl = (slice(y, y + bh), slice(x, x + bw))
+        a = soft[sl][..., None]
+        out[sl] = (frame[sl] * (1 - a) + fill[sl] * a).astype(np.uint8)
+        return out
+
+
+# =============================================================================
 # Debug renderers
 # =============================================================================
 def draw_skeleton(frame: np.ndarray, pose: SmoothPose, i: int) -> np.ndarray:
@@ -472,8 +873,19 @@ def parse_args(argv=None):
     return p.parse_args(argv)
 
 
+class StageTimer:
+    def __init__(self):
+        self.t0 = self.t = time.time()
+
+    def __call__(self, name: str):
+        now = time.time()
+        print(f"  [{name}: {now - self.t:.1f}s]")
+        self.t = now
+
+
 def main(argv=None):
     t0 = time.time()
+    lap = StageTimer()
     args = parse_args(argv)
     check_ffmpeg()
     if not args.input.exists():
@@ -510,17 +922,42 @@ def main(argv=None):
     n_frames = min(n_frames, len(track.detected))
     pose = smooth_pose(track, fps, CONFIG["smoothing"], info.height)
     print(f"pose detected in {track.detected.sum()}/{len(track.detected)} frames")
+    lap("pose")
 
-    if args.stage != "skeleton":
-        sys.exit(f"stage '{args.stage}' is not implemented yet - run with --stage skeleton")
+    # --- Stage 2: person removal ---------------------------------------------
+    scene = plate = remover = None
+    rcfg = CONFIG["removal"]
+    if args.stage != "skeleton" and not args.keep_person:
+        # The plate samples the whole clip even in preview mode: the person may only move
+        # out of the way after the preview window.
+        need = np.zeros(info.n_frames, bool)
+        need[:n_frames] = True                              # frames we render
+        need[plate_sample_frames(info.n_frames, rcfg)] = True  # frames the plate is built from
+        scene = cached_scene(info, need, rcfg, cache_dir, not args.no_cache)
+        lap("segmentation")
+        plate = cached_plate(info, scene, rcfg, cache_dir, not args.no_cache)
+        remover = PersonRemover(scene, plate, rcfg, out_scale)
+        plate_png = args.output.with_name(args.output.stem + "_plate.png")
+        cv2.imwrite(str(plate_png), plate.image)
+        print(f"background plate saved: {plate_png}")
+        lap("background plate")
+    if args.stage == "final":
+        sys.exit("stage 'final' is not implemented yet - use --stage skeleton or --stage background")
 
     # --- Render -------------------------------------------------------------
     writer = FFmpegWriter(args.output, out_w, out_h, info.fps,
                           info.path if info.has_audio else None, out_duration, CONFIG["encode"],
                           info.audio_codec)
     for i, frame in tqdm(iter_frames(info.path, n_frames), total=n_frames, desc="rendering", unit="f"):
-        writer.write(draw_skeleton(frame, pose, i))
+        if out_scale != 1.0 and args.stage != "skeleton":
+            frame = cv2.resize(frame, (out_w, out_h), interpolation=cv2.INTER_AREA)
+        if args.stage == "skeleton":
+            out = draw_skeleton(frame, pose, i)
+        else:
+            out = frame if scene is None else remover(frame, i)
+        writer.write(out)
     writer.close()
+    lap("render + encode")
     print(f"done: {args.output}  (total {time.time() - t0:.1f}s)")
 
 
