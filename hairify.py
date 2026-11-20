@@ -68,33 +68,104 @@ CONFIG = {
         "warp_smooth_frames": 5,         # temporal smoothing of camera motion estimates
         "min_inliers": 25,               # background feature matches needed to align a frame
     },
-    "creature": {
-        "strand_count": 3000,            # total strands at --density 1.0
+    # Lengths, sizes and widths below are in units of W, the body scale (~shoulder width).
+    "body": {
+        "radius_scale": 1.0,             # capsule thickness multiplier
+        "z_scale": 0.6,                  # trust in MediaPipe depth (noisy)
+        "scale_smooth_s": 0.5,           # temporal smoothing of the body scale
+        "occlusion_vis": 0.75,           # bones with lower median visibility are clipped to the person mask
+    },
+    "creature": {                        # --creature strand (rubber hair)
+        "strand_count": 2200,            # total strands at --density 1.0
         "segments": 8,                   # points per strand (6-10)
-        "hair_length": 0.09,             # strand length as fraction of body height at --hair-length 1.0
-        "length_jitter": 0.25,
-        "core_scale": 1.0,
+        "hair_length": 0.5,              # strand length (W) at --hair-length 1.0
+        "length_jitter": 0.3,
+        "fan_out": 0.6,                  # 0 = strands follow the 3D surface normal, 1 = flattened
+                                         # sideways so front strands fan out instead of facing the lens
     },
-    "physics": {
-        "substeps": 4,
-        "sim_rate": 120.0,               # physics steps/s (independent of video fps)
-        "gravity": 2.5,                  # body heights / s^2
-        "damping": 0.06,                 # velocity loss per 1/120 s step
-        "stiffness": 0.5,                # pull toward rest direction (0..1, --stiffness)
-        "constraint_iters": 2,
+    "physics": {                         # strand simulation (Verlet)
+        "sim_rate": 120.0,               # physics steps/s, independent of the video fps
+        "gravity": 20.0,                 # W / s^2
+        "damping": 0.035,                # velocity loss per step
+        "stiffness": 0.5,                # default for --stiffness (0..1)
+        "k_min": 0.004,                  # spring pull per step at stiffness 0
+        "k_max": 0.22,                   # ... at stiffness 1
+        "tip_softness": 0.6,             # tips are this much softer than roots (whippier)
     },
-    "render": {
+    "render": {                          # strand shading
         "color": "#ff3fa4",
-        "root_darken": 0.45,             # root colour = base * (1 - root_darken)
+        "root_darken": 0.55,             # root colour = base * (1 - root_darken)
         "tip_lighten": 0.30,
-        "color_variation": 0.08,
-        "root_width": 0.006,             # fraction of frame height
-        "tip_width": 0.0015,
-        "light_dir": (-0.4, -0.7, 0.6),
+        "color_variation": 0.10,
+        "root_width": 0.026,             # W
+        "tip_width": 0.006,
+        "light_dir": (-0.4, -0.7, 0.6),  # x right, y down, z away from camera
         "specular": 0.6,
-        "shininess": 24.0,
-        "core_color": "#2a0716",
+        "shininess": 30.0,
+        "core_darkness": 0.9,            # core body colour = root colour * this
         "shadow_opacity": 0.45,
+    },
+    "fiber": {                           # --creature fiber (fiber-optic neon)
+        "strand_count": 2000,
+        "segments": 10,
+        "hair_length": 0.6,
+        "length_jitter": 0.35,
+        "stiffness_scale": 1.25,
+        "width": 0.006,                  # W
+        "tip_size": 0.012,               # W
+        "hue_spread": 45.0,              # degrees around --color
+        "hue_drift": 15.0,               # degrees / s
+        "base_glow": 0.45,
+        "pulse_gain": 0.6,               # extra brightness of hit pulses
+        "fan_out": 0.6,
+        "pulse_speed": 2.2,              # fiber lengths / s
+        "glow": 0.7,
+    },
+    "circuit": {                         # --creature circuit (circuit-board skin)
+        "traces": 650,
+        "body_color": "#141a2e",
+        "trace_width": 0.008,            # W
+        "step": (0.05, 0.16),            # trace segment length range (W)
+        "min_segments": 3,
+        "max_points": 9,
+        "turn_prob": 0.45,               # chance of a 45 degree turn per segment
+        "chips": 8,
+        "base_brightness": 0.45,
+        "ambient_pulses": 30.0,          # pulses / s
+        "hit_pulses": 45,                # pulses per drum hit
+        "pulse_speed": 1.6,              # trace lengths / s
+        "glow": 1.0,
+    },
+    "swarm": {                           # --creature swarm (voxel cubes) and vowels
+        "count": 3500,
+        "cube_size": 0.05,               # W, at --hair-length 1.0
+        "hue_spread": 25.0,
+        "freq_min": 1.5,                 # spring frequency (Hz) at stiffness 0
+        "freq_max": 7.0,                 # ... at stiffness 1
+        "damping_ratio": 0.3,            # <1 = overshoot and jiggle
+        "scatter_speed": 4.0,            # W / s per unit hit strength
+        "scatter_radius": 0.8,           # W around the striking hand
+        "glow": 0.8,
+    },
+    "vowels": {                          # --creature vowels (letter swarm)
+        "count": 2200,
+        "size_scale": 1.6,               # letters relative to cube_size
+        "swap_rate": 0.8,                # letter changes / s
+    },
+    "audio": {                           # drum-hit detection
+        "sample_rate": 22050,
+        "threshold": 3.0,                # in MADs above the local median of spectral flux
+        "median_window_s": 0.4,
+        "min_gap_s": 0.06,
+        "decay_s": 0.15,
+    },
+    "grade": {                           # --grade cyber
+        "exposure": 0.42,
+        "gamma": 1.5,
+        "tint": 0.6,
+        "shadow_tint": "#0a5a78",
+        "highlight_tint": "#7a5ab0",
+        "vignette": 0.65,
     },
     "encode": {
         "crf": 18,
@@ -810,6 +881,833 @@ class PersonRemover:
 
 
 # =============================================================================
+# Audio: drum hits / onsets (drive pulses, flashes and scatter in the sci-fi creatures)
+# =============================================================================
+@dataclass
+class Hits:
+    times: np.ndarray       # [H] seconds
+    strength: np.ndarray    # [H] ~0.2..1.5
+    per_frame: np.ndarray   # [N] strongest hit starting in each video frame (0 = none)
+    env: np.ndarray         # [N] decaying hit envelope (0..~2)
+
+
+def detect_hits(info: VideoInfo, n_frames: int, cfg: dict) -> Hits:
+    fps = float(info.fps)
+    empty = Hits(np.zeros(0), np.zeros(0), np.zeros(n_frames, np.float32), np.zeros(n_frames, np.float32))
+    if not info.has_audio:
+        return empty
+    sr = cfg["sample_rate"]
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(info.path), "-vn", "-ac", "1",
+                          "-ar", str(sr), "-t", f"{n_frames / fps + 0.5:.3f}", "-f", "f32le", "-"],
+                         capture_output=True).stdout
+    x = np.frombuffer(raw, np.float32)
+    n_fft, hop = 1024, 256
+    if len(x) < n_fft * 4:
+        return empty
+    nfr = 1 + (len(x) - n_fft) // hop
+    win = np.hanning(n_fft).astype(np.float32)
+    flux = np.zeros(nfr, np.float32)
+    prev = None
+    for c in range(0, nfr, 2048):                       # spectral flux, chunked
+        idx = np.arange(n_fft)[None, :] + hop * np.arange(c, min(nfr, c + 2048))[:, None]
+        mag = np.log1p(100 * np.abs(np.fft.rfft(x[idx] * win, axis=1)))
+        if prev is not None:
+            mag = np.vstack([prev, mag])
+        d = np.maximum(0, np.diff(mag, axis=0)).sum(1)
+        flux[c + (0 if prev is not None else 1): c + (0 if prev is not None else 1) + len(d)] = d
+        prev = mag[-1:]
+    t = (np.arange(nfr) * hop + n_fft / 2) / sr
+    w = max(3, int(cfg["median_window_s"] * sr / hop))
+    from numpy.lib.stride_tricks import sliding_window_view
+    med = np.median(sliding_window_view(np.pad(flux, (w // 2, w - w // 2 - 1), mode="edge"), w), axis=1)
+    mad = np.median(np.abs(flux - np.median(flux))) + 1e-6
+    thr = med + cfg["threshold"] * mad
+    k = max(1, int(0.03 * sr / hop))
+    loc_max = flux == np.max(sliding_window_view(np.pad(flux, (k, k), mode="edge"), 2 * k + 1), axis=1)
+    cand = np.flatnonzero((flux > thr) & loc_max)
+    peaks, last = [], -1e9
+    for p in cand:                                      # enforce a minimum gap
+        if t[p] - last >= cfg["min_gap_s"]:
+            peaks.append(p)
+            last = t[p]
+    if not peaks:
+        return empty
+    peaks = np.array(peaks)
+    st = flux[peaks] / (np.percentile(flux[peaks], 90) + 1e-6)
+    st = np.clip(st, 0.2, 1.5).astype(np.float32)
+    times = t[peaks]
+    fr_t = np.arange(n_frames) / fps
+    per_frame = np.zeros(n_frames, np.float32)
+    fi = np.clip(np.round(times * fps).astype(int), 0, n_frames - 1)
+    np.maximum.at(per_frame, fi, st)
+    env = np.zeros(n_frames, np.float32)
+    decay = cfg["decay_s"]
+    for th, s in zip(times, st):
+        a = int(np.ceil(th * fps))
+        b = min(n_frames, a + int(decay * 6 * fps) + 1)
+        if a < n_frames:
+            env[a:b] += s * np.exp(-(fr_t[a:b] - th) / decay)
+    print(f"audio: {len(times)} hits detected ({len(times) / max(fr_t[-1], 1e-3):.1f}/s)")
+    return Hits(times, st, per_frame, env)
+
+
+# =============================================================================
+# Stage 3: creature body (capsules on the skeleton)
+# =============================================================================
+def hex_to_bgr(h: str) -> np.ndarray:
+    h = h.lstrip("#")
+    if len(h) != 6:
+        sys.exit(f"error: bad colour '{h}', use #rrggbb")
+    return np.array([int(h[4:6], 16), int(h[2:4], 16), int(h[0:2], 16)], np.float32)
+
+
+def bgr_to_hsv_deg(bgr: np.ndarray) -> tuple[float, float, float]:
+    hsv = cv2.cvtColor(np.uint8([[np.clip(bgr, 0, 255)]]), cv2.COLOR_BGR2HSV)[0, 0]
+    return hsv[0] * 2.0, hsv[1] / 255.0, hsv[2] / 255.0
+
+
+def hsv_deg_to_bgr(h, s, v) -> np.ndarray:
+    """Vectorised HSV (degrees, 0..1, 0..1) -> BGR float32 0..255."""
+    h = np.asarray(h, np.float32) % 360
+    s, v = np.broadcast_arrays(np.asarray(s, np.float32), np.asarray(v, np.float32))
+    hsv = np.stack(np.broadcast_arrays(h / 2, s * 255, v * 255), -1).reshape(-1, 1, 3)
+    out = cv2.cvtColor(np.clip(hsv, 0, 255).astype(np.uint8), cv2.COLOR_HSV2BGR)
+    return out.reshape(np.broadcast(h, s).shape + (3,)).astype(np.float32)
+
+
+# Extra virtual landmarks appended after MediaPipe's 33.
+VIRTUAL_POINTS = {"mid_sh": (11, 12), "mid_hip": (23, 24), "head": (7, 8),
+                  "hand_l": (17, 19), "hand_r": (18, 20)}
+_VIDX = {name: 33 + k for k, name in enumerate(VIRTUAL_POINTS)}
+# (name, joint a, joint b, radius as fraction of body scale W). a == b -> sphere.
+BONES = [
+    ("torso", "mid_sh", "mid_hip", 0.30), ("torso_l", 11, 23, 0.17), ("torso_r", 12, 24, 0.17),
+    ("shoulders", 11, 12, 0.13), ("hips", 23, 24, 0.16), ("neck", "mid_sh", "head", 0.11),
+    ("head", "head", "head", 0.30),
+    ("upper_arm_l", 11, 13, 0.11), ("upper_arm_r", 12, 14, 0.11),
+    ("forearm_l", 13, 15, 0.085), ("forearm_r", 14, 16, 0.085),
+    ("hand_l", 15, "hand_l", 0.075), ("hand_r", 16, "hand_r", 0.075),
+    ("thigh_l", 23, 25, 0.15), ("thigh_r", 24, 26, 0.15),
+    ("shin_l", 25, 27, 0.11), ("shin_r", 26, 28, 0.11),
+    ("foot_l", 29, 31, 0.065), ("foot_r", 30, 32, 0.065),
+]
+BONE_IA = np.array([_VIDX.get(a, a) for _, a, _, _ in BONES])
+BONE_IB = np.array([_VIDX.get(b, b) for _, _, b, _ in BONES])
+BONE_RF = np.array([r for *_, r in BONES], np.float32)
+BONE_SPHERE = BONE_IA == BONE_IB
+
+
+class Body:
+    """Per-frame capsule geometry in output pixels. Depth z uses MediaPipe's z (same scale
+    as x, smaller = closer to the camera), scaled down because it is the noisiest axis."""
+
+    def __init__(self, pose: SmoothPose, scale: float, fps: float, cfg: dict):
+        P = pose.img * scale
+        P[..., 2] *= cfg["z_scale"]
+        n = len(P)
+        E = np.concatenate([P, np.zeros((n, len(VIRTUAL_POINTS), 3), np.float32)], 1)
+        V = np.concatenate([pose.vis, np.zeros((n, len(VIRTUAL_POINTS)), np.float32)], 1)
+        for name, (a, b) in VIRTUAL_POINTS.items():
+            E[:, _VIDX[name]] = (P[:, a] + P[:, b]) / 2
+            V[:, _VIDX[name]] = np.minimum(pose.vis[:, a], pose.vis[:, b])
+        self.valid = pose.valid & ~np.isnan(E).any(axis=(1, 2))
+        E = np.nan_to_num(E)
+        # Body scale W: shoulder width, or torso length for side-on poses; smoothed.
+        sw = np.linalg.norm(E[:, 11, :2] - E[:, 12, :2], axis=1)
+        tl = np.linalg.norm(E[:, _VIDX["mid_sh"], :2] - E[:, _VIDX["mid_hip"], :2], axis=1)
+        raw = np.maximum(sw, 0.75 * tl)
+        idx = np.arange(n)
+        if self.valid.any():
+            raw = np.interp(idx, idx[self.valid], raw[self.valid])
+            win = max(1, int(fps))
+            from numpy.lib.stride_tricks import sliding_window_view
+            raw = np.median(sliding_window_view(np.pad(raw, (win // 2, win - win // 2 - 1), mode="edge"), win), 1)
+            sig = max(1.0, cfg["scale_smooth_s"] * fps)
+            k = np.exp(-0.5 * (np.arange(-3 * int(sig), 3 * int(sig) + 1) / sig) ** 2)
+            raw = np.convolve(np.pad(raw, len(k) // 2, mode="edge"), k / k.sum(), "valid")
+        self.W = np.maximum(raw, 8.0).astype(np.float32)
+        self.A, self.B = E[:, BONE_IA], E[:, BONE_IB]            # [N,nb,3]
+        self.R = BONE_RF[None] * self.W[:, None] * cfg["radius_scale"]
+        self.bone_vis = np.minimum(V[:, BONE_IA], V[:, BONE_IB])
+        self.n_bones = len(BONES)
+        v = self.valid if self.valid.any() else np.ones(n, bool)
+        self.len_med = np.median(np.linalg.norm(self.B[v] - self.A[v], axis=-1), axis=0) + 1e-3
+        self.W_med = float(np.median(self.W[v]))
+        # Bones the person's own body hides (e.g. legs behind a table) are clipped to the
+        # person mask so real foreground objects stay in front of the creature.
+        self.occluded = np.median(self.bone_vis[v], axis=0) < cfg["occlusion_vis"]
+
+    def area_weights(self, extra: np.ndarray | None = None) -> np.ndarray:
+        rf = BONE_RF * self.W_med
+        a = np.where(BONE_SPHERE, 4 * np.pi * rf ** 2, 2 * np.pi * rf * self.len_med)
+        if extra is not None:
+            a = a * extra
+        return a / a.sum()
+
+    def frames(self, i: int):
+        A, B = self.A[i], self.B[i]
+        d = B - A
+        ln = np.linalg.norm(d, axis=1, keepdims=True)
+        d = np.where((ln > 1e-3) & ~BONE_SPHERE[:, None], d / np.maximum(ln, 1e-3), [0.0, -1.0, 0.0])
+        u = np.cross(d, [0.0, 0.0, 1.0])
+        bad = np.linalg.norm(u, axis=1) < 1e-3
+        u[bad] = np.cross(d[bad], [1.0, 0.0, 0.0])
+        u /= np.linalg.norm(u, axis=1, keepdims=True)
+        v = np.cross(d, u)                  # theta = 90deg points toward the camera (-z)
+        return A, B, d, u, v
+
+    def surface(self, i: int, bone, t, th, rho=1.0):
+        """Points on (rho<1: inside) the capsules. Returns (pos [n,3], normal [n,3])."""
+        A, B, d, u, v = self.frames(i)
+        R = self.R[i]
+        ct, st = np.cos(th)[:, None], np.sin(th)[:, None]
+        nperp = ct * u[bone] + st * v[bone]
+        rho = np.asarray(rho, np.float32)
+        rr = (R[bone] * rho)[:, None] if rho.ndim else R[bone][:, None] * rho
+        sph = BONE_SPHERE[bone][:, None]
+        phi = np.arccos(np.clip(1 - 2 * t, -1, 1))[:, None]
+        n_sph = np.cos(phi) * d[bone] + np.sin(phi) * nperp
+        normal = np.where(sph, n_sph, nperp)
+        base = np.where(sph, A[bone], A[bone] + t[:, None] * (B[bone] - A[bone]))
+        return (base + rr * normal).astype(np.float32), normal.astype(np.float32)
+
+
+# =============================================================================
+# Stage 3: creatures
+# =============================================================================
+LINE = cv2.LINE_AA
+
+
+class Creature:
+    """Base class. step(i) advances the simulation to frame i (called once per frame, in
+    order); draw() paints the bones selected by `sel` onto `img` and emissive light onto
+    `glow` (uint8, bloomed and added afterwards)."""
+    default_color = "#ff3fa4"
+
+    def __init__(self, body: Body, args, hits: Hits, fps: float, size: tuple[int, int], seed=7):
+        self.body, self.args, self.hits, self.fps = body, args, hits, fps
+        self.w, self.h = size
+        self.rng = np.random.default_rng(seed)
+        self.color = hex_to_bgr(args.color or self.default_color)
+
+    def step(self, i: int):
+        pass
+
+    def draw(self, img, glow, i, sel):
+        raise NotImplementedError
+
+    def draw_core(self, img, i, sel, color, shrink=0.85, opacity=1.0, shade=False):
+        """Filled capsules (soft edged). With shade=True, a cylinder-like shading from a
+        distance transform gives the body some volume."""
+        b = self.body
+        A, B, R = b.A[i], b.B[i], b.R[i] * shrink
+        idx = [k for k in range(b.n_bones) if sel[k]]
+        if not idx:
+            return
+        pad = int(R.max()) + 4
+        xs = np.concatenate([A[idx, 0], B[idx, 0]])
+        ys = np.concatenate([A[idx, 1], B[idx, 1]])
+        x0, x1 = int(max(0, xs.min() - pad)), int(min(self.w, xs.max() + pad))
+        y0, y1 = int(max(0, ys.min() - pad)), int(min(self.h, ys.max() + pad))
+        if x1 <= x0 or y1 <= y0:
+            return
+        m = np.zeros((y1 - y0, x1 - x0), np.uint8)
+        off = np.array([x0, y0])
+        for k in idx:
+            a = tuple(int(c) for c in A[k, :2] - off)
+            r = int(max(1, R[k]))
+            if BONE_SPHERE[k]:
+                cv2.circle(m, a, r, 255, -1, LINE)
+            else:
+                cv2.line(m, a, tuple(int(c) for c in B[k, :2] - off), 255, 2 * r, LINE)
+        soft = cv2.GaussianBlur(m, (0, 0), max(1.0, 0.012 * b.W[i])).astype(np.float32) / 255
+        roi = img[y0:y1, x0:x1].astype(np.float32)
+        col = np.broadcast_to(np.asarray(color, np.float32), roi.shape)
+        if shade:
+            dist = cv2.distanceTransform((m > 127).astype(np.uint8), cv2.DIST_L2, 5)
+            s = np.clip(dist / max(4.0, 0.12 * b.W[i]), 0, 1)
+            vol = np.sqrt(1 - (1 - s) ** 2)                       # rounded profile
+            col = col * (0.35 + 0.65 * vol[..., None])
+        a = (soft * opacity)[..., None]
+        img[y0:y1, x0:x1] = (roi * (1 - a) + col * a).astype(np.uint8)
+
+    def draw_contact_shadow(self, img, i):
+        b = self.body
+        k_l, k_r = len(BONES) - 2, len(BONES) - 1                    # foot bones
+        if b.bone_vis[i, [k_l, k_r]].max() < 0.5:
+            return
+        pts = np.concatenate([b.A[i, [k_l, k_r], :2], b.B[i, [k_l, k_r], :2]])
+        if pts[:, 1].max() > self.h * 0.995:
+            return
+        cx, cy = float(pts[:, 0].mean()), float(pts[:, 1].max())
+        W = float(b.W[i])
+        m = np.zeros((self.h, self.w), np.uint8)
+        cv2.ellipse(m, (int(cx), int(cy)), (int(0.9 * W), int(0.12 * W)), 0, 0, 360, 255, -1, LINE)
+        m = cv2.GaussianBlur(m, (0, 0), 0.12 * W)
+        a = (m.astype(np.float32) / 255 * CONFIG["render"]["shadow_opacity"])[..., None]
+        img[:] = (img * (1 - a)).astype(np.uint8)
+
+
+# --- Strand creature (rubber hair) and fiber-optic variant -----------------------
+class StrandCreature(Creature):
+    default_color = "#ff3fa4"
+    cfg_key = "creature"
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        c = CONFIG[self.cfg_key]
+        body, rng, args = self.body, self.rng, self.args
+        n = max(10, int(c["strand_count"] * args.density))
+        self.K = K = int(c["segments"])
+        self.bones = rng.choice(body.n_bones, n, p=body.area_weights())
+        self.t = rng.random(n).astype(np.float32)
+        self.th = (rng.random(n) * 2 * np.pi).astype(np.float32)
+        jit = c["length_jitter"]
+        self.L = (c["hair_length"] * args.hair_length * (1 + jit * (2 * rng.random(n) - 1))).astype(np.float32)
+        self.var = rng.standard_normal((n, 3)).astype(np.float32)
+        ph = CONFIG["physics"]
+        s = float(np.clip(args.stiffness, 0, 1)) * c.get("stiffness_scale", 1.0)
+        k = ph["k_min"] + (ph["k_max"] - ph["k_min"]) * min(s, 1.5) ** 2
+        prof = 1 - ph["tip_softness"] * np.arange(K) / (K - 1)
+        self.kprof = (k * prof).astype(np.float32)
+        self.kprof[0] = 0
+        self.dt = 1.0 / ph["sim_rate"]
+        self.P = self.Pp = None
+        self.acc = 0.0
+        self.root = self.nrm = None
+
+    def _rest_dir(self, nrm):
+        # Flatten the toward/away-from-camera component so strands on the front of the
+        # body fan out sideways (reads much better in 2D than spikes aimed at the lens).
+        f = CONFIG[self.cfg_key].get("fan_out", 0.0)
+        d = nrm * np.array([1.0, 1.0, 1.0 - f], np.float32)
+        side = np.linalg.norm(d[:, :2], axis=1, keepdims=True)
+        # Strands aimed straight at the camera get a deterministic sideways direction.
+        fallback = np.stack([np.cos(self.th * 3.7), np.sin(self.th * 3.7), np.zeros_like(self.th)], 1)
+        d = np.where(side < 0.25, d + fallback * (0.25 - side) * 2 * f, d)
+        return d / (np.linalg.norm(d, axis=1, keepdims=True) + 1e-6)
+
+    def _rest(self, root, nrm, seg):
+        steps = np.arange(self.K, dtype=np.float32)
+        return root[:, None] + self._rest_dir(nrm)[:, None] * (seg[:, None] * steps)[..., None]
+
+    def step(self, i):
+        b = self.body
+        if not b.valid[i]:
+            self.P = None
+            return
+        root, nrm = b.surface(i, self.bones, self.t, self.th)
+        seg = self.L * b.W[i] / (self.K - 1)
+        if self.P is None:
+            self.P = self._rest(root, nrm, seg)
+            self.Pp = self.P.copy()
+            self.root, self.nrm, self.acc = root, nrm, 0.0
+            return
+        ph = CONFIG["physics"]
+        self.acc += 1.0 / self.fps
+        n = max(1, int(self.acc / self.dt))
+        self.acc -= n * self.dt
+        g = ph["gravity"] * float(b.W[i]) * self.dt * self.dt
+        damp = 1.0 - ph["damping"]
+        r0, n0 = self.root, self.nrm
+        P, Pp, kp = self.P, self.Pp, self.kprof[None, :, None]
+        for s in range(n):
+            f = (s + 1) / n
+            r = r0 + (root - r0) * f
+            nn = n0 + (nrm - n0) * f
+            nn /= np.linalg.norm(nn, axis=1, keepdims=True) + 1e-6
+            vel = (P - Pp) * damp
+            Pp = P
+            P = P + vel
+            P[..., 1] += g
+            P += (self._rest(r, nn, seg) - P) * kp           # springy pull to rest shape
+            P[:, 0] = r
+            for j in range(1, self.K):                       # segment lengths (follow the leader)
+                d = P[:, j] - P[:, j - 1]
+                ln = np.linalg.norm(d, axis=1, keepdims=True) + 1e-6
+                P[:, j] = P[:, j - 1] + d * (seg[:, None] / ln)
+            Pp[:, 0] = r
+        self.P, self.Pp, self.root, self.nrm = P, Pp, root, nrm
+
+    # -- shading helpers
+    def _tangent_light(self, P):
+        rc = CONFIG["render"]
+        T = P[:, 1:] - P[:, :-1]
+        T /= np.linalg.norm(T, axis=-1, keepdims=True) + 1e-6
+        L = np.asarray(rc["light_dir"], np.float32)
+        L /= np.linalg.norm(L)
+        H = L + np.array([0, 0, -1.0], np.float32)
+        H /= np.linalg.norm(H)
+        diffuse = np.sqrt(np.clip(1 - (T @ L) ** 2, 0, 1))
+        spec = np.sqrt(np.clip(1 - (T @ H) ** 2, 0, 1)) ** rc["shininess"]
+        return T, diffuse, spec
+
+    def _order(self, sel_s):
+        idx = np.flatnonzero(sel_s)
+        depth = self.P[idx, :, 2].mean(1)
+        back = self.nrm[idx, 2] > 0.35                       # pointing away from camera
+        o_back = idx[back][np.argsort(-depth[back])]
+        o_front = idx[~back][np.argsort(-depth[~back])]
+        return o_back, o_front
+
+    def draw(self, img, glow, i, sel):
+        if self.P is None:
+            return
+        rc = CONFIG["render"]
+        sel_s = sel[self.bones]
+        if not sel_s.any():
+            return
+        W = float(self.body.W[i])
+        base = self.color
+        root_c = base * (1 - rc["root_darken"])
+        tip_c = base + (255 - base) * rc["tip_lighten"]
+        K = self.K
+        g = np.linspace(0, 1, K - 1, dtype=np.float32)[None, :, None]
+        T, diffuse, spec = self._tangent_light(self.P)
+        var = 1 + rc["color_variation"] * self.var[:, None, :]
+        col = (root_c + (tip_c - root_c) * g) * var * (0.35 + 0.65 * diffuse[..., None])
+        hi = np.clip(col + rc["specular"] * 255 * spec[..., None], 0, 255)
+        col = np.clip(col, 0, 255)
+        widths = np.maximum(1, np.round((rc["root_width"] + (rc["tip_width"] - rc["root_width"]) * g[0, :, 0]) * W)).astype(int)
+        hw = np.maximum(1, widths // 3)
+        # Highlight offset: toward the light, perpendicular to the strand in 2D.
+        L2 = -np.asarray(rc["light_dir"][:2], np.float32)
+        perp = np.stack([-T[..., 1], T[..., 0]], -1)
+        sgn = np.sign((perp * -L2).sum(-1, keepdims=True) + 1e-6)
+        off = perp * sgn * (widths[None, :, None] * 0.25)
+        pts = np.round(self.P[..., :2]).astype(np.int32)
+        hpts_a = np.round(self.P[:, :-1, :2] + off).astype(np.int32)
+        hpts_b = np.round(self.P[:, 1:, :2] + off).astype(np.int32)
+        o_back, o_front = self._order(sel_s)
+
+        def paint(order):
+            P_l, C_l, H_l = pts[order].tolist(), col[order].tolist(), hi[order].tolist()
+            S_l = spec[order].tolist()
+            A_l, B_l = hpts_a[order].tolist(), hpts_b[order].tolist()
+            wl, hl = widths.tolist(), hw.tolist()
+            for p, c, hc, sp, ha, hb in zip(P_l, C_l, H_l, S_l, A_l, B_l):
+                for j in range(K - 1):
+                    cv2.line(img, p[j], p[j + 1], c[j], wl[j], LINE)
+                for j in range(K - 1):
+                    if sp[j] > 0.3 and abs(ha[j][0] - hb[j][0]) + abs(ha[j][1] - hb[j][1]) > 2 * wl[j]:
+                        cv2.line(img, ha[j], hb[j], hc[j], hl[j], LINE)
+
+        paint(o_back)
+        core = np.clip(base * (1 - rc["root_darken"]) * rc["core_darkness"], 0, 255)
+        self.draw_core(img, i, sel, core, shrink=0.9)
+        paint(o_front)
+
+
+class FiberCreature(StrandCreature):
+    """Fiber-optic neon: dark thin fibers with glowing, colour-shifting tips and light
+    pulses racing root -> tip on every drum hit."""
+    default_color = "#00e5ff"
+    cfg_key = "fiber"
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        c = CONFIG["fiber"]
+        h, s, v = bgr_to_hsv_deg(self.color)
+        self.hue0 = h
+        self.hue = (h + c["hue_spread"] * self.rng.uniform(-1, 1, len(self.bones))).astype(np.float32)
+        self.delay = self.rng.uniform(0, 0.12, len(self.bones)).astype(np.float32)
+
+    def draw(self, img, glow, i, sel):
+        if self.P is None:
+            return
+        c = CONFIG["fiber"]
+        sel_s = sel[self.bones]
+        if not sel_s.any():
+            return
+        W = float(self.body.W[i])
+        K = self.K
+        tnow = i / self.fps
+        hue = self.hue + c["hue_drift"] * tnow
+        g = np.linspace(0, 1, K, dtype=np.float32)
+        # Light pulses from recent hits travelling along each fiber.
+        boost = np.zeros((len(self.bones), K), np.float32)
+        hits = self.hits
+        if len(hits.times):
+            recent = (hits.times <= tnow) & (hits.times > tnow - 1.2)
+            for th, st in zip(hits.times[recent], hits.strength[recent]):
+                pos = (tnow - th - self.delay) * c["pulse_speed"]
+                boost += c["pulse_gain"] * st * np.exp(-0.5 * ((g[None] - pos[:, None]) / 0.12) ** 2)
+        env = float(hits.env[i]) if len(hits.env) else 0.0
+        bright = (0.25 + 0.75 * g ** 2)[None] * (c["base_glow"] + 0.2 * min(env, 1.5)) + boost
+        emis = hsv_deg_to_bgr(hue[:, None].repeat(K, 1), 0.85 - 0.35 * np.clip(boost, 0, 1), 1.0)
+        emis = np.clip(emis * np.clip(bright, 0, 1.3)[..., None], 0, 255)
+        fiber_c = np.clip(self.color * 0.12 + 18, 0, 255)
+        width = max(1, int(round(c["width"] * W)))
+        tip_r = max(1, int(round(c["tip_size"] * W)))
+        pts = np.round(self.P[..., :2]).astype(np.int32)
+        o_back, o_front = self._order(sel_s)
+
+        def paint(order):
+            P_l, E_l = pts[order].tolist(), emis[order].tolist()
+            for p, e in zip(P_l, E_l):
+                for j in range(K - 1):
+                    cv2.line(img, p[j], p[j + 1], fiber_c.tolist(), width, LINE)
+                for j in range(K // 2, K - 1):           # light leaking from the outer half
+                    cv2.line(img, p[j], p[j + 1], e[j + 1], width, LINE)
+                    cv2.line(glow, p[j], p[j + 1], e[j + 1], width + 1, LINE)
+                cv2.circle(img, p[-1], tip_r, e[-1], -1, LINE)
+                cv2.circle(glow, p[-1], tip_r * 2, e[-1], -1, LINE)
+
+        paint(o_back)
+        self.draw_core(img, i, sel, (12, 8, 10), shrink=0.9)
+        paint(o_front)
+
+
+# --- Circuit-board skin ------------------------------------------------------------
+class CircuitCreature(Creature):
+    """Dark shaded body covered in PCB traces, vias and chips; light pulses run along the
+    traces, ambiently and in bursts on drum hits."""
+    default_color = "#19f0ff"
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        c = CONFIG["circuit"]
+        b, rng = self.body, self.rng
+        n = max(10, int(c["traces"] * self.args.density))
+        maxp = c["max_points"]
+        bones = rng.choice(b.n_bones, n, p=b.area_weights())
+        pts = np.zeros((n, maxp, 2), np.float32)            # (t, theta) per point
+        cnt = np.zeros(n, int)
+        for k in range(n):
+            bo = bones[k]
+            rf = BONE_RF[bo] * CONFIG["body"]["radius_scale"]
+            sph = BONE_SPHERE[bo]
+            # Walk in arc-length units (multiples of W) on the unrolled surface.
+            ax_len = (np.pi * rf) if sph else b.len_med[bo] / b.W_med
+            a = rng.uniform(0.1, 0.9) * ax_len
+            th = rng.uniform(0, 2 * np.pi)
+            ang = rng.integers(0, 8) * np.pi / 4
+            nseg = rng.integers(c["min_segments"], maxp)
+            out = [(a, th)]
+            for _ in range(nseg):
+                if rng.random() < c["turn_prob"]:
+                    ang += rng.choice([-1, 1]) * np.pi / 4
+                ln = rng.uniform(*c["step"]) * self.args.hair_length
+                na = a + np.cos(ang) * ln
+                nth = th + np.sin(ang) * ln / rf
+                if not (0.02 * ax_len < na < 0.98 * ax_len):
+                    break
+                a, th = na, nth
+                out.append((a, th))
+            if len(out) < 2:
+                out.append((a, th + 0.05 / rf))
+            o = np.array(out, np.float32)
+            if sph:
+                o[:, 0] = (1 - np.cos(o[:, 0] / rf)) / 2      # polar angle -> t
+            else:
+                o[:, 0] = o[:, 0] / ax_len
+            cnt[k] = len(o)
+            pts[k, :len(o)] = o
+            pts[k, len(o):] = o[-1]
+        self.tr_bones, self.tr_pts, self.tr_cnt = bones, pts, cnt
+        # Chips: small quads on the torso / upper arms.
+        nchip = int(c["chips"] * self.args.density)
+        chip_bones = rng.choice([0, 1, 2, 7, 8], nchip)
+        self.chips = [(bo, rng.uniform(0.15, 0.85), rng.uniform(np.pi * 0.2, np.pi * 0.8),
+                       rng.uniform(0.05, 0.10)) for bo in chip_bones]
+        # Pulses (parallel arrays).
+        self.p_tr = np.zeros(0, int)
+        self.p_pos = np.zeros(0, np.float32)
+        self.p_spd = np.zeros(0, np.float32)
+        self.p_str = np.zeros(0, np.float32)
+        hh, ss, vv = bgr_to_hsv_deg(self.color)
+        self.hue = hh
+
+    def _spawn(self, k, strength):
+        if k <= 0:
+            return
+        c = CONFIG["circuit"]
+        tr = self.rng.integers(0, len(self.tr_bones), k)
+        self.p_tr = np.concatenate([self.p_tr, tr])
+        self.p_pos = np.concatenate([self.p_pos, np.zeros(k, np.float32)])
+        self.p_spd = np.concatenate([self.p_spd, (c["pulse_speed"] * self.rng.uniform(0.6, 1.4, k)).astype(np.float32)])
+        self.p_str = np.concatenate([self.p_str, np.full(k, strength, np.float32)])
+
+    def step(self, i):
+        c = CONFIG["circuit"]
+        dt = 1.0 / self.fps
+        self.p_pos += self.p_spd * dt
+        keep = self.p_pos < 1.0
+        self.p_tr, self.p_pos, self.p_spd, self.p_str = (self.p_tr[keep], self.p_pos[keep],
+                                                        self.p_spd[keep], self.p_str[keep])
+        self._spawn(self.rng.poisson(c["ambient_pulses"] * dt * self.args.density), 0.7)
+        hs = float(self.hits.per_frame[i]) if len(self.hits.per_frame) else 0.0
+        if hs > 0:
+            self._spawn(int(c["hit_pulses"] * hs * self.args.density), 0.7 + 0.5 * hs)
+
+    def draw(self, img, glow, i, sel):
+        b = self.body
+        if not b.valid[i]:
+            return
+        c = CONFIG["circuit"]
+        W = float(b.W[i])
+        self.draw_core(img, i, sel, hex_to_bgr(c["body_color"]), shrink=1.0, shade=True)
+        sel_t = sel[self.tr_bones]
+        if not sel_t.any():
+            return
+        n, mp_ = self.tr_pts.shape[:2]
+        flat_b = np.repeat(self.tr_bones, mp_)
+        pos, nrm = b.surface(i, flat_b, self.tr_pts[..., 0].ravel(), self.tr_pts[..., 1].ravel())
+        pos = pos.reshape(n, mp_, 3)
+        facing = (-nrm[:, 2]).reshape(n, mp_)               # >0 faces the camera
+        env = float(self.hits.env[i]) if len(self.hits.env) else 0.0
+        level = c["base_brightness"] + (1 - c["base_brightness"]) * min(1.0, env * 0.6)
+        tw = max(1, int(round(c["trace_width"] * W)))
+        via = max(2, int(round(tw * 1.8)))
+        p2 = np.round(pos[..., :2]).astype(np.int32)
+        base = self.color
+        fl = facing.tolist()
+        pl = p2.tolist()
+        cl = self.tr_cnt.tolist()
+        for k in np.flatnonzero(sel_t).tolist():
+            p, f, m = pl[k], fl[k], cl[k]
+            for j in range(m - 1):
+                ff = min(f[j], f[j + 1])
+                if ff <= 0.05:
+                    continue
+                col = (base * (level * ff ** 0.5)).tolist()
+                cv2.line(img, p[j], p[j + 1], col, tw, LINE)
+                cv2.line(glow, p[j], p[j + 1], (base * (0.35 * level * ff)).tolist(), tw, LINE)
+            for j in (0, m - 1):
+                if f[j] > 0.1:
+                    col = (base * (level * f[j] ** 0.5)).tolist()
+                    cv2.circle(img, p[j], via, col, max(1, tw // 2 + 1), LINE)
+        # Chips
+        for bo, t0, th0, sz in self.chips:
+            if not sel[bo]:
+                continue
+            rf = BONE_RF[bo]
+            dt_ = sz * b.W_med / b.len_med[bo]
+            dth = sz / rf
+            q_t = np.array([t0 - dt_, t0 + dt_, t0 + dt_, t0 - dt_], np.float32)
+            q_th = np.array([th0 - dth, th0 - dth, th0 + dth, th0 + dth], np.float32)
+            qp, qn = b.surface(i, np.full(4, bo), q_t, q_th)
+            f = float((-qn[:, 2]).min())
+            if f <= 0.15:
+                continue
+            quad = np.round(qp[:, :2]).astype(np.int32)
+            cv2.fillConvexPoly(img, quad, (22, 22, 26), LINE)
+            cv2.polylines(img, [quad], True, (base * level * f).tolist(), max(1, tw // 2), LINE)
+        # Pulses
+        if len(self.p_tr):
+            sel_p = sel_t[self.p_tr]
+            for tr, ps, st in zip(self.p_tr[sel_p].tolist(), self.p_pos[sel_p].tolist(), self.p_str[sel_p].tolist()):
+                m = cl[tr]
+                x = ps * (m - 1)
+                j = min(int(x), m - 2)
+                fr = x - j
+                f = min(fl[tr][j], fl[tr][j + 1])
+                if f <= 0.05:
+                    continue
+                a, bb = pos[tr, j, :2], pos[tr, j + 1, :2]
+                pt = tuple(int(v) for v in np.round(a + (bb - a) * fr))
+                hot = np.clip(base * 0.5 + 160, 0, 255) * st * f
+                cv2.circle(img, pt, tw + 1, np.clip(hot, 0, 255).tolist(), -1, LINE)
+                cv2.circle(glow, pt, tw * 4, np.clip(base * st * f * 1.2, 0, 255).tolist(), -1, LINE)
+
+
+# --- Voxel swarm -----------------------------------------------------------------------
+class SwarmCreature(Creature):
+    """Thousands of small cubes sprung to points inside the body capsules. They lag and
+    overshoot on fast moves and are blasted outward around the striking hand on drum hits."""
+    default_color = "#ff3fa4"
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        c = CONFIG["swarm"]
+        b, rng = self.body, self.rng
+        count = CONFIG["vowels"]["count"] if isinstance(self, VowelSwarmCreature) else c["count"]
+        n = max(10, int(count * self.args.density))
+        self.bones = rng.choice(b.n_bones, n, p=b.area_weights())
+        self.t = rng.random(n).astype(np.float32)
+        self.th = (rng.random(n) * 2 * np.pi).astype(np.float32)
+        self.rho = np.sqrt(rng.uniform(0.25, 1.0, n)).astype(np.float32)
+        self.size = (c["cube_size"] * self.args.hair_length * rng.uniform(0.7, 1.3, n)).astype(np.float32)
+        h, s, v = bgr_to_hsv_deg(self.color)
+        hue = h + c["hue_spread"] * rng.uniform(-1, 1, n)
+        self.col = hsv_deg_to_bgr(hue, np.clip(s * rng.uniform(0.8, 1.1, n), 0, 1),
+                                  np.clip(v * rng.uniform(0.65, 1.05, n), 0, 1))
+        stiff = float(np.clip(self.args.stiffness, 0, 1))
+        f_hz = c["freq_min"] + (c["freq_max"] - c["freq_min"]) * stiff
+        self.omega = (2 * np.pi * f_hz * rng.uniform(0.8, 1.2, n)).astype(np.float32)
+        self.zeta = c["damping_ratio"]
+        self.dt = 1.0 / CONFIG["physics"]["sim_rate"]
+        self.X = self.V = None
+        self.tgt = None
+        self.acc = 0.0
+        self.prev_wrists = None
+
+    def step(self, i):
+        b, c = self.body, CONFIG["swarm"]
+        if not b.valid[i]:
+            self.X = None
+            return
+        tgt, _ = b.surface(i, self.bones, self.t, self.th, self.rho)
+        W = float(b.W[i])
+        wr = np.stack([b.B[i, 11], b.B[i, 12]])                  # hand tips
+        if self.X is None:
+            self.X, self.V, self.tgt, self.acc = tgt.copy(), np.zeros_like(tgt), tgt, 0.0
+            self.prev_wrists = wr
+            return
+        # Drum hit: blast cubes outward around the hand that is moving down fastest.
+        hs = float(self.hits.per_frame[i]) if len(self.hits.per_frame) else 0.0
+        if hs > 0:
+            vy = wr[:, 1] - self.prev_wrists[:, 1]
+            center = wr[int(np.argmax(vy))]
+            d = self.X - center
+            dist = np.linalg.norm(d, axis=1, keepdims=True) + 1e-3
+            fall = np.clip(1 - dist / (c["scatter_radius"] * W), 0, 1) ** 2
+            rnd = self.rng.standard_normal(self.X.shape).astype(np.float32) * 0.6
+            self.V += (d / dist + rnd) * fall * (c["scatter_speed"] * W * hs)
+        self.prev_wrists = wr
+        self.acc += 1.0 / self.fps
+        n = max(1, int(self.acc / self.dt))
+        self.acc -= n * self.dt
+        t0, w2 = self.tgt, (self.omega ** 2)[:, None]
+        c2 = (2 * self.zeta * self.omega)[:, None]
+        X, V = self.X, self.V
+        for s in range(n):
+            T = t0 + (tgt - t0) * ((s + 1) / n)
+            V += (w2 * (T - X) - c2 * V) * self.dt
+            X += V * self.dt
+        self.X, self.V, self.tgt = X, V, tgt
+
+    def draw(self, img, glow, i, sel):
+        if self.X is None:
+            return
+        sel_p = sel[self.bones]
+        if not sel_p.any():
+            return
+        W = float(self.body.W[i])
+        idx = np.flatnonzero(sel_p)
+        idx = idx[np.argsort(-self.X[idx, 2])]                 # back to front
+        h = (self.size[idx] * W / 2)
+        o = h * 0.55
+        x, y = self.X[idx, 0], self.X[idx, 1]
+        speed = np.linalg.norm(self.V[idx], axis=1) / (W * 3.0)
+        hot = np.clip(speed, 0, 1)[:, None]
+        col = self.col[idx]
+        front = np.clip(col * 0.85 + hot * 120, 0, 255)
+        top = np.clip(col * 1.25 + 30 + hot * 120, 0, 255)
+        side = np.clip(col * 0.5 + hot * 80, 0, 255)
+        F = np.stack([np.stack([x - h, y - h], 1), np.stack([x + h, y - h], 1),
+                      np.stack([x + h, y + h], 1), np.stack([x - h, y + h], 1)], 1)
+        Tq = np.stack([np.stack([x - h, y - h], 1), np.stack([x + h, y - h], 1),
+                       np.stack([x + h + o, y - h - o], 1), np.stack([x - h + o, y - h - o], 1)], 1)
+        Sq = np.stack([np.stack([x + h, y - h], 1), np.stack([x + h + o, y - h - o], 1),
+                       np.stack([x + h + o, y + h - o], 1), np.stack([x + h, y + h], 1)], 1)
+        F, Tq, Sq = (np.round(q).astype(np.int32) for q in (F, Tq, Sq))
+        for f, t, s_, cf, ct, cs in zip(F, Tq, Sq, front.tolist(), top.tolist(), side.tolist()):
+            cv2.fillConvexPoly(img, t, ct)
+            cv2.fillConvexPoly(img, s_, cs)
+            cv2.fillConvexPoly(img, f, cf)
+        fast = np.flatnonzero(hot[:, 0] > 0.25)
+        for k in fast.tolist():
+            cv2.circle(glow, (int(x[k]), int(y[k])), int(h[k] * 2 + 1),
+                       (col[k] * hot[k, 0]).tolist(), -1, LINE)
+
+
+class VowelSwarmCreature(SwarmCreature):
+    """Same swarm physics, but every particle is a vowel (A E I O U) - a typographic
+    creature that spells nothing and scatters into letters on each drum hit."""
+    default_color = "#ffd23f"
+    LETTERS = "AEIOU"
+    FONTS = [cv2.FONT_HERSHEY_SIMPLEX, cv2.FONT_HERSHEY_DUPLEX, cv2.FONT_HERSHEY_TRIPLEX]
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        n = len(self.bones)
+        self.letter = self.rng.integers(0, len(self.LETTERS), n)
+        self.font = self.rng.integers(0, len(self.FONTS), n)
+        self.size *= CONFIG["vowels"]["size_scale"]
+        self.swap_rate = CONFIG["vowels"]["swap_rate"]
+
+    def step(self, i):
+        super().step(i)
+        if self.X is not None:                               # letters flicker to other vowels
+            k = self.rng.random(len(self.letter)) < self.swap_rate / self.fps
+            self.letter[k] = self.rng.integers(0, len(self.LETTERS), int(k.sum()))
+
+    def draw(self, img, glow, i, sel):
+        if self.X is None:
+            return
+        sel_p = sel[self.bones]
+        if not sel_p.any():
+            return
+        W = float(self.body.W[i])
+        idx = np.flatnonzero(sel_p)
+        idx = idx[np.argsort(-self.X[idx, 2])]
+        speed = np.clip(np.linalg.norm(self.V[idx], axis=1) / (W * 3.0), 0, 1)
+        # Depth shading: letters further back are darker.
+        z = self.X[idx, 2]
+        zn = (z - z.min()) / (np.ptp(z) + 1e-6)
+        col = self.col[idx] * (1.05 - 0.45 * zn[:, None]) + speed[:, None] * 120
+        col = np.clip(col, 0, 255)
+        dark = np.clip(self.col[idx] * 0.2, 0, 255)
+        scale = self.size[idx] * W / 22.0                      # Hershey glyphs are ~22px at scale 1
+        thick = np.maximum(1, np.round(scale * 2.2)).astype(int)
+        x, y = self.X[idx, 0], self.X[idx, 1]
+        for k, (xx, yy, sc, th, c, d, l, f, sp) in enumerate(zip(
+                x.tolist(), y.tolist(), scale.tolist(), thick.tolist(), col.tolist(), dark.tolist(),
+                self.letter[idx].tolist(), self.font[idx].tolist(), speed.tolist())):
+            ch = self.LETTERS[l]
+            font = self.FONTS[f]
+            org = (int(xx - sc * 8), int(yy + sc * 8))
+            cv2.putText(img, ch, org, font, sc, d, th + 2, LINE)    # dark outline for legibility
+            cv2.putText(img, ch, org, font, sc, c, th, LINE)
+            if sp > 0.25:
+                cv2.putText(glow, ch, org, font, sc, (np.array(c) * sp).tolist(), th + 2, LINE)
+
+
+CREATURES = {"strand": StrandCreature, "fiber": FiberCreature, "circuit": CircuitCreature,
+             "swarm": SwarmCreature, "vowels": VowelSwarmCreature}
+DEFAULT_GRADE = {"strand": "none", "fiber": "cyber", "circuit": "cyber", "swarm": "none",
+                 "vowels": "cyber"}
+
+
+# --- Post: bloom and colour grade ---------------------------------------------------
+def add_glow(img: np.ndarray, glow: np.ndarray, strength: float) -> np.ndarray:
+    if strength <= 0 or not glow.any():
+        return img
+    h, w = img.shape[:2]
+    small = cv2.resize(glow, (max(1, w // 4), max(1, h // 4)), interpolation=cv2.INTER_AREA)
+    b1 = cv2.GaussianBlur(small, (0, 0), max(1.0, h / 400))
+    b2 = cv2.GaussianBlur(small, (0, 0), max(2.0, h / 120))
+    bloom = cv2.resize(cv2.addWeighted(b1, 1.0, b2, 1.0, 0), (w, h), interpolation=cv2.INTER_LINEAR)
+    out = cv2.addWeighted(img, 1.0, glow, 0.5 * strength, 0)
+    return cv2.addWeighted(out, 1.0, bloom, strength, 0)
+
+
+_GRADE_CACHE: dict = {}
+
+
+def grade_frame(img: np.ndarray, mode: str) -> np.ndarray:
+    if mode == "none":
+        return img
+    gc = CONFIG["grade"]
+    h, w = img.shape[:2]
+    key = (h, w)
+    if key not in _GRADE_CACHE:
+        yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+        r = np.sqrt(((xx - w / 2) / (w / 2)) ** 2 + ((yy - h / 2) / (h / 2)) ** 2)
+        _GRADE_CACHE[key] = (1 - gc["vignette"] * np.clip(r - 0.3, 0, 1) ** 1.5)[..., None]
+        lut = np.arange(256, dtype=np.float32) / 255
+        _GRADE_CACHE["lut"] = (lut ** gc["gamma"] * gc["exposure"])
+    vig = _GRADE_CACHE[key]
+    f = cv2.LUT(img, np.clip(_GRADE_CACHE["lut"] * 255, 0, 255).astype(np.uint8)).astype(np.float32) / 255
+    lum = f.mean(axis=2, keepdims=True)
+    sh, hi = hex_to_bgr(gc["shadow_tint"]) / 255, hex_to_bgr(gc["highlight_tint"]) / 255
+    tint = sh + (hi - sh) * np.clip(lum * 2.5, 0, 1)
+    f = f * (1 - gc["tint"]) + f * tint * 2.0 * gc["tint"]
+    return np.clip(f * vig * 255, 0, 255).astype(np.uint8)
+
+
+# =============================================================================
 # Debug renderers
 # =============================================================================
 def draw_skeleton(frame: np.ndarray, pose: SmoothPose, i: int) -> np.ndarray:
@@ -857,11 +1755,17 @@ def parse_args(argv=None):
     p = argparse.ArgumentParser(description="Replace a person in a video with a rubbery hair creature.")
     p.add_argument("input", type=Path, help="input video (one person, ideally full body)")
     p.add_argument("-o", "--output", type=Path, default=None, help="output .mp4 (default: <input>_hairy.mp4)")
-    p.add_argument("--color", default=CONFIG["render"]["color"], help="strand base colour, hex (default %(default)s)")
-    p.add_argument("--hair-length", type=float, default=1.0, help="strand length multiplier (default 1.0)")
+    p.add_argument("--creature", choices=list(CREATURES), default="strand",
+                   help="creature style (default %(default)s)")
+    p.add_argument("--color", default=None, help="base colour, hex (default depends on the creature)")
+    p.add_argument("--grade", choices=["auto", "none", "cyber"], default="auto",
+                   help="background colour grade (auto: cyber for fiber/circuit/vowels)")
+    p.add_argument("--hair-length", type=float, default=1.0,
+                   help="strand length / trace length / cube size multiplier (default 1.0)")
     p.add_argument("--stiffness", type=float, default=CONFIG["physics"]["stiffness"],
                    help="0 = floppy, 1 = stiff spikes (default %(default)s)")
-    p.add_argument("--density", type=float, default=1.0, help="strand count multiplier (default 1.0)")
+    p.add_argument("--density", type=float, default=1.0,
+                   help="strand / trace / particle count multiplier (default 1.0)")
     p.add_argument("--preview", action="store_true",
                    help=f"only the first {CONFIG['preview']['seconds']:g}s at half resolution")
     p.add_argument("--keep-person", action="store_true", help="skip person removal (draw creature on top)")
@@ -871,6 +1775,31 @@ def parse_args(argv=None):
                    help="pose model size (default %(default)s)")
     p.add_argument("--no-cache", action="store_true", help="re-run pose tracking even if cached")
     return p.parse_args(argv)
+
+
+def render_creature(bg, i, creature, grade, glow_strength, occl, pose, scene, rcfg):
+    bg = grade_frame(bg, grade)
+    creature.step(i)
+    alpha = float(pose.alpha[i]) if creature.body.valid[i] else 0.0
+    if alpha <= 0:
+        return bg
+    h, w = bg.shape[:2]
+    out = bg.copy()
+    glow = np.zeros_like(out)
+    creature.draw_contact_shadow(out, i)
+    if occl.any():
+        # Hidden body parts first, kept only where the person was (so e.g. a table or
+        # drum pad in front of the legs stays in front of the creature).
+        tmp, g2 = out.copy(), np.zeros_like(out)
+        creature.draw(tmp, g2, i, occl)
+        keep = person_mask(scene, i, (w, h), rcfg)[..., None]
+        out = (out * (1 - keep) + tmp * keep).astype(np.uint8)
+        glow = (g2 * keep).astype(np.uint8)
+    creature.draw(out, glow, i, ~occl)
+    out = add_glow(out, glow, glow_strength)
+    if alpha < 1:
+        out = cv2.addWeighted(bg, 1 - alpha, out, alpha, 0)
+    return out
 
 
 class StageTimer:
@@ -891,7 +1820,6 @@ def main(argv=None):
     if not args.input.exists():
         sys.exit(f"error: {args.input} not found")
     CONFIG["pose"]["model"] = args.model
-    CONFIG["render"]["color"] = args.color
     CONFIG["physics"]["stiffness"] = float(np.clip(args.stiffness, 0, 1))
 
     info = probe_video(args.input)
@@ -906,7 +1834,7 @@ def main(argv=None):
     out_w = int(round(info.width * out_scale / 2) * 2)   # even sizes for yuv420p
     out_h = int(round(info.height * out_scale / 2) * 2)
     if args.output is None:
-        suffix = "" if args.stage == "final" else f"_{args.stage}"
+        suffix = f"_{args.creature}" if args.stage == "final" else f"_{args.stage}"
         suffix += "_preview" if args.preview else ""
         args.output = args.input.with_name(f"{args.input.stem}_hairy{suffix}.mp4")
     print(f"input : {info.path.name}  {info.width}x{info.height} @ {fps:.3f} fps, "
@@ -941,8 +1869,21 @@ def main(argv=None):
         cv2.imwrite(str(plate_png), plate.image)
         print(f"background plate saved: {plate_png}")
         lap("background plate")
+    # --- Stage 3: creature --------------------------------------------------
+    creature = None
     if args.stage == "final":
-        sys.exit("stage 'final' is not implemented yet - use --stage skeleton or --stage background")
+        hits = detect_hits(info, n_frames, CONFIG["audio"])
+        body = Body(pose, out_w / info.width, fps, CONFIG["body"])
+        if scene is not None and body.occluded.any():
+            print("clipped to the person mask (hidden in the video): " +
+                  ", ".join(BONES[k][0] for k in np.flatnonzero(body.occluded)))
+        creature = CREATURES[args.creature](body, args, hits, fps, (out_w, out_h))
+        grade = DEFAULT_GRADE[args.creature] if args.grade == "auto" else args.grade
+        glow_strength = CONFIG.get(args.creature, {}).get("glow", 0.0)
+        if args.creature == "vowels":
+            glow_strength = CONFIG["swarm"]["glow"]
+        occl = body.occluded if scene is not None else np.zeros(body.n_bones, bool)
+        lap("creature setup")
 
     # --- Render -------------------------------------------------------------
     writer = FFmpegWriter(args.output, out_w, out_h, info.fps,
@@ -955,6 +1896,8 @@ def main(argv=None):
             out = draw_skeleton(frame, pose, i)
         else:
             out = frame if scene is None else remover(frame, i)
+        if creature is not None:
+            out = render_creature(out, i, creature, grade, glow_strength, occl, pose, scene, rcfg)
         writer.write(out)
     writer.close()
     lap("render + encode")

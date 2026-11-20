@@ -3,8 +3,9 @@
 Replace the person in a short video with a CGI creature made of rubbery, jiggling
 hair/spike strands, in the spirit of Method Studios' "AICP 2016 Sponsor Reel".
 
-> **Status:** stages (a) pose tracking and (b) person removal are done. The creature (c)
-> comes next. Until then, use `--stage skeleton` or `--stage background`.
+Five creature styles: rubber **strand** hair, **fiber**-optic neon, **circuit**-board skin, a
+voxel **swarm** of cubes and a **vowels** swarm of letters. The sci-fi styles react to drum hits /
+beats detected in the soundtrack.
 
 ## Setup
 
@@ -30,6 +31,12 @@ On headless Linux, MediaPipe also needs the EGL/GLES libraries (it uses them eve
 .venv/bin/python hairify.py input.mp4 -o output.mp4 --color "#ff3fa4" \
     --hair-length 1.0 --stiffness 0.5 --density 1.0
 
+# other creatures
+.venv/bin/python hairify.py input.mp4 --creature fiber
+.venv/bin/python hairify.py input.mp4 --creature circuit --color "#39ff88"
+.venv/bin/python hairify.py input.mp4 --creature swarm --stiffness 0.3
+.venv/bin/python hairify.py input.mp4 --creature vowels --grade none
+
 # fast iteration: first 5 s at half resolution
 .venv/bin/python hairify.py input.mp4 --preview
 
@@ -50,10 +57,12 @@ same clip with different look settings skips the slow parts. Delete that folder 
 |---|---|---|
 | `input` | | Input video: one person, ideally full body, static camera. |
 | `-o, --output` | `<input>_hairy.mp4` | Output MP4 path. |
-| `--color` | `#ff3fa4` | Strand base colour (hex). Roots are darker, tips lighter. |
-| `--hair-length` | `1.0` | Strand length multiplier. |
-| `--stiffness` | `0.5` | 0 = floppy wet noodles, 1 = stiff spikes. |
-| `--density` | `1.0` | Strand count multiplier (1.0 ≈ 3000 strands). |
+| `--creature` | `strand` | `strand`, `fiber`, `circuit`, `swarm` or `vowels` (see below). |
+| `--color` | per creature | Base colour (hex). |
+| `--grade` | `auto` | Background grade: `none`, `cyber` (dark teal/violet, vignette). `auto` = cyber for fiber, circuit and vowels. |
+| `--hair-length` | `1.0` | Strand length (strand, fiber), trace length (circuit), cube/letter size (swarm, vowels). |
+| `--stiffness` | `0.5` | 0 = floppy, 1 = stiff. Strand springiness (strand, fiber) or how tightly particles follow the body (swarm, vowels). |
+| `--density` | `1.0` | Count multiplier: strands, traces or particles. |
 | `--preview` | off | Render only the first 5 s at half resolution. |
 | `--keep-person` | off | Skip person removal; draw the creature on top (debugging). |
 | `--stage` | `final` | `skeleton` = pose debug overlay, `background` = person removed, `final` = creature. |
@@ -62,6 +71,25 @@ same clip with different look settings skips the slow parts. Delete that folder 
 
 All other tunables (smoothing, strand/segment counts, gravity, damping, colours, widths,
 encoder settings) are in the `CONFIG` dict at the top of `hairify.py`.
+
+## Creatures
+
+| `--creature` | Default colour | What it is |
+|---|---|---|
+| `strand` | `#ff3fa4` | Rubbery strands on the body capsules, Verlet physics: they lag, overshoot and wobble. Glossy shading (dark roots, light tips, specular highlight), dark core body underneath. |
+| `fiber` | `#00e5ff` | Same physics; dark fibers with glowing, colour-shifting tips and light pulses running root→tip on every drum hit. Bloom. |
+| `circuit` | `#19f0ff` | Shaded dark body covered in PCB traces, vias and chips; light pulses run along the traces, in bursts on drum hits. |
+| `swarm` | `#ff3fa4` | Thousands of shaded cubes sprung to points inside the body. Fast moves make them trail; drum hits blast them away from the striking hand. |
+| `vowels` | `#ffd23f` | The same swarm made of the letters A E I O U, flickering between vowels. |
+
+How the body works: capsules along the skeleton (torso, neck, head, arms, hands, legs, feet),
+sized from the body scale W (≈ shoulder width, smoothed). Each strand root / trace / particle keeps
+a fixed position on its capsule, so it follows the body. Body parts the tracker reports as
+hidden (e.g. legs behind a table) are clipped to the person's mask, so real objects in front of the
+person stay in front of the creature. Physics runs at a fixed 120 Hz with substeps, independent of
+the video fps.
+
+Drum hits come from spectral-flux onset detection on the audio track (`CONFIG["audio"]`).
 
 ## Skeleton debug video (`--stage skeleton`)
 
