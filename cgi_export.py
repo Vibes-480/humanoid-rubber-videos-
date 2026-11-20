@@ -124,8 +124,11 @@ def composite(args):
         d = np.load(npz, allow_pickle=True)
         stem = str(npz)[:-4]
         bg = cv2.imread(stem + "_bg.png").astype(np.float32)
-        fg = cv2.imread(stem + "_render.png", cv2.IMREAD_UNCHANGED).astype(np.float32)
+        fg = cv2.imread(stem + args.tag + "_render.png", cv2.IMREAD_UNCHANGED).astype(np.float32)
+        if fg.shape[:2] != bg.shape[:2]:                 # quick low-res test renders
+            bg = cv2.resize(bg, (fg.shape[1], fg.shape[0]), interpolation=cv2.INTER_AREA)
         a = fg[..., 3:4] / 255.0
+        a[a < 6 / 255.0] = 0                               # ignore shadow-catcher noise
         out = bg * (1 - a) + fg[..., :3] * a            # Blender writes straight (unpremultiplied) alpha
         if str(d["creature"]) in ("fiber", "circuit", "vowels", "swarm"):
             # Bloom from the brightest parts of the render (the emissive bits).
@@ -136,8 +139,8 @@ def composite(args):
             bloom = cv2.GaussianBlur(small, (0, 0), h / 200) + cv2.GaussianBlur(small, (0, 0), h / 60)
             gain = {"fiber": 0.45, "circuit": 1.0, "vowels": 0.5, "swarm": 0.4}[str(d["creature"])]
             out = out + gain * cv2.resize(bloom, (w, h), interpolation=cv2.INTER_LINEAR)
-        cv2.imwrite(stem + "_final.png", np.clip(out, 0, 255).astype(np.uint8))
-        print(f"composited {stem}_final.png")
+        cv2.imwrite(stem + args.tag + "_final.png", np.clip(out, 0, 255).astype(np.uint8))
+        print(f"composited {stem}{args.tag}_final.png")
 
 
 def main():
@@ -156,6 +159,7 @@ def main():
     e.add_argument("--grade", choices=["auto", "none", "cyber"], default="auto")
     c = sub.add_parser("composite")
     c.add_argument("npz", type=Path, nargs="+")
+    c.add_argument("--tag", default="", help="render variant suffix, e.g. _hq")
     args = p.parse_args()
     export(args) if args.cmd == "export" else composite(args)
 

@@ -15,6 +15,9 @@ import bpy
 import numpy as np
 
 
+LIGHT = 0.3
+
+
 def srgb_to_linear(c):
     c = np.asarray(c, np.float32)
     return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
@@ -71,6 +74,38 @@ class Scene:
         self.sun("key", (55, 0, -35), key, 6)                   # front, upper left
         self.sun("fill", (70, 0, 45), fill, 25, (0.85, 0.9, 1.0))   # front right, soft
         self.sun("rim", (-40, 0, 20), rim, 4)                   # from behind, above
+
+    def area(self, name, loc, size, energy, color=(1, 1, 1), target=None):
+        from mathutils import Vector
+        l = bpy.data.lights.new(name, "AREA")
+        l.shape, l.size, l.size_y = "RECTANGLE", size, size * 0.6
+        l.energy, l.color = energy, color
+        o = bpy.data.objects.new(name, l)
+        o.location = loc
+        tgt = Vector(self.center if target is None else target)
+        o.rotation_euler = (tgt - Vector(loc)).to_track_quat("-Z", "Y").to_euler()
+        self.sc.collection.objects.link(o)
+        return o
+
+    def studio_lights(self, k=1.0):
+        """Soft lighting matched to the room: ceiling panels in front, white-wall bounce,
+        and a rim light behind for edge highlights. Units: 1 = frame height."""
+        cx, cz = self.center[0], self.center[2]
+        self.area("key", (cx - 1.4, -2.6, cz + 2.0), 1.6, 900 * k, (1.0, 0.97, 0.92))
+        self.area("fill", (cx + 1.8, -3.0, cz + 0.4), 2.5, 380 * k, (0.9, 0.94, 1.0))
+        self.area("bounce", (cx, -3.0, cz - 1.6), 2.5, 150 * k, (1.0, 0.95, 0.95))
+        self.area("rim_l", (cx - 1.3, 2.2, cz + 1.4), 1.0, 700 * k)
+        self.area("rim_r", (cx + 1.3, 2.2, cz + 1.2), 1.0, 500 * k)
+
+    def shadow_wall(self, depth):
+        """Invisible wall behind the creature that only receives its shadow."""
+        bpy.ops.mesh.primitive_plane_add(size=1)
+        o = bpy.context.object
+        o.scale = (self.W / self.H * 3, 3, 1)
+        o.rotation_euler = (math.pi / 2, 0, 0)
+        o.location = (self.center[0], depth, self.center[2])
+        o.is_shadow_catcher = True
+        return o
 
     # -- materials ------------------------------------------------------------------
     def material(self, name):
@@ -208,15 +243,18 @@ class Scene:
 
 
 # =================================================================================
-def build_strand(S: Scene, d, fiber=False):
+def build_strand(S: Scene, d, fiber=False, hq=False):
     P = S.bl(d["points"])
     n, K = P.shape[:2]
     t = np.linspace(0, 1, K, dtype=np.float32)[None]
     if fiber:
         r = np.full((n, K), float(d["fiber_w"]) / 2 / S.H, np.float32)
     else:
-        r = 1.4 * (float(d["root_w"]) + (float(d["tip_w"]) - float(d["root_w"])) * t) / 2 / S.H
+        r = (1.7 if hq else 1.4) * (float(d["root_w"]) + (float(d["tip_w"]) - float(d["root_w"])) * t) / 2 / S.H
         r = np.repeat(r, n, 0)
+    if not fiber and hq:
+        build_strand_hq(S, d, P, r)
+        return
     if not fiber:
         base = srgb_to_linear(d["color"])
         col = np.clip(base[None] * d["var"], 0, 1)
@@ -265,6 +303,53 @@ def build_strand(S: Scene, d, fiber=False):
         bt.inputs["Emission Strength"].default_value = 4.0
         S.points("tips", P[:, -1], np.full(n, 0.7 * float(d["tip"]) / S.H), {"col": (rgb, "col")}, mt)
         S.three_point(key=1.0, fill=0.3, rim=2.5)
+
+
+def build_strand_hq(S: Scene, d, P, r):
+    """High-quality wet-rubber strands: saturated subsurface material with a glossy coat,
+    soft area lighting matched to the room, and a shadow on the wall behind."""
+    sc = S.sc
+    sc.view_settings.view_transform = "AgX"
+    sc.view_settings.look = "AgX - Medium High Contrast"
+    sc.cycles_curves.shape = "THICK"
+    sc.cycles_curves.subdivisions = 4
+    sc.cycles.max_bounces = 8
+    sc.cycles.transparent_max_bounces = 8
+    base = srgb_to_linear(d["color"])
+    rng = np.random.default_rng(11)
+    var = np.clip(d["var"] * rng.uniform(0.9, 1.1, (len(P), 1)), 0.5, 1.6)
+    col = np.clip(base[None] * var, 0, 1)
+    m, nt, bsdf = S.material("rubber_hq")
+    N, Lk = nt.nodes, nt.links
+    hi = N.new("ShaderNodeHairInfo")
+    # Darker, denser colour at the roots (fake occlusion), lighter at the tips.
+    ramp = N.new("ShaderNodeValToRGB")
+    ramp.color_ramp.elements[0].position, ramp.color_ramp.elements[0].color = 0.0, (0.28, 0.28, 0.28, 1)
+    ramp.color_ramp.elements[1].position, ramp.color_ramp.elements[1].color = 0.55, (1, 1, 1, 1)
+    e = ramp.color_ramp.elements.new(1.0)
+    e.color = (1.15, 1.15, 1.15, 1)
+    Lk.new(hi.outputs["Intercept"], ramp.inputs["Fac"])
+    mix = N.new("ShaderNodeMix")
+    mix.data_type, mix.blend_type = "RGBA", "MULTIPLY"
+    mix.inputs["Factor"].default_value = 1.0
+    Lk.new(S.attr(nt, "col").outputs["Color"], mix.inputs[6])
+    Lk.new(ramp.outputs["Color"], mix.inputs[7])
+    Lk.new(mix.outputs[2], bsdf.inputs["Base Color"])
+    Lk.new(mix.outputs[2], bsdf.inputs["Subsurface Radius"])
+    bsdf.inputs["Roughness"].default_value = 0.38
+    bsdf.inputs["Subsurface Weight"].default_value = 0.45
+    bsdf.inputs["Subsurface Scale"].default_value = float(np.mean(r)) * 1.5
+    bsdf.inputs["Coat Weight"].default_value = 1.0
+    bsdf.inputs["Coat Roughness"].default_value = 0.06
+    bsdf.inputs["Coat IOR"].default_value = 1.5
+    bsdf.inputs["Specular IOR Level"].default_value = 0.6
+    S.hair("strands", P, r, {"col": col}, m)
+    world = sc.world.node_tree.nodes["Background"]
+    world.inputs[0].default_value = (0.8, 0.8, 0.82, 1)
+    world.inputs[1].default_value = 0.25
+    S.studio_lights(LIGHT)
+    depth = 3.2                       # behind the rim lights (they sit at y = 2.2)
+    S.shadow_wall(depth)
 
 
 def build_circuit(S: Scene, d):
@@ -371,15 +456,20 @@ def main():
     args = [a for a in sys.argv[sys.argv.index("--") + 1:]] if "--" in sys.argv else sys.argv[1:]
     path = args[0]
     samples = int(args[args.index("--samples") + 1]) if "--samples" in args else 48
+    hq = "--hq" in args
+    global LIGHT
+    LIGHT = float(args[args.index("--light") + 1]) if "--light" in args else 0.3
+    pct = int(args[args.index("--percent") + 1]) if "--percent" in args else 100
     d = np.load(path, allow_pickle=True)
     S = Scene(d)
     S.sc.cycles.samples = samples
     S.sc.cycles.use_adaptive_sampling = True
+    S.sc.render.resolution_percentage = pct
     kind = str(d["creature"])
-    {"strand": lambda: build_strand(S, d), "fiber": lambda: build_strand(S, d, fiber=True),
+    {"strand": lambda: build_strand(S, d, hq=hq), "fiber": lambda: build_strand(S, d, fiber=True),
      "circuit": lambda: build_circuit(S, d), "swarm": lambda: build_swarm(S, d),
      "vowels": lambda: build_swarm(S, d, vowels=True)}[kind]()
-    S.sc.render.filepath = path[:-4] + "_render.png"
+    S.sc.render.filepath = path[:-4] + ("_hq" if hq else "") + "_render.png"
     t = time.time()
     bpy.ops.render.render(write_still=True)
     print(f"RENDERED {S.sc.render.filepath} in {time.time() - t:.1f}s")

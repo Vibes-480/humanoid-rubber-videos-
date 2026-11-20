@@ -9,3 +9,4 @@ models/
 outputs/
 .venv-blender/
 cgi_out/
+cgi_hq/
