@@ -213,7 +213,7 @@ def build_strand(S: Scene, d, fiber=False):
     n, K = P.shape[:2]
     t = np.linspace(0, 1, K, dtype=np.float32)[None]
     if fiber:
-        r = np.full((n, K), float(d["width"]) / 2 / S.H, np.float32)
+        r = np.full((n, K), float(d["fiber_w"]) / 2 / S.H, np.float32)
     else:
         r = 1.4 * (float(d["root_w"]) + (float(d["tip_w"]) - float(d["root_w"])) * t) / 2 / S.H
         r = np.repeat(r, n, 0)
@@ -253,7 +253,7 @@ def build_strand(S: Scene, d, fiber=False):
         nt.links.new(hi.outputs["Intercept"], pw.inputs[0])
         mul = nt.nodes.new("ShaderNodeMath")
         mul.operation = "MULTIPLY"
-        mul.inputs[1].default_value = 6.0 + 4.0 * min(float(d["env"]), 1.5)
+        mul.inputs[1].default_value = 1.6 + 1.0 * min(float(d["env"]), 1.5)
         nt.links.new(pw.outputs[0], mul.inputs[0])
         nt.links.new(S.attr(nt, "col").outputs["Color"], bsdf.inputs["Emission Color"])
         nt.links.new(mul.outputs[0], bsdf.inputs["Emission Strength"])
@@ -262,8 +262,8 @@ def build_strand(S: Scene, d, fiber=False):
         mt, ntt, bt = S.material("tips")
         bt.inputs["Base Color"].default_value = (1, 1, 1, 1)
         ntt.links.new(S.attr(ntt, "col").outputs["Color"], bt.inputs["Emission Color"])
-        bt.inputs["Emission Strength"].default_value = 18.0
-        S.points("tips", P[:, -1], np.full(n, float(d["tip"]) / S.H), {"col": (rgb, "col")}, mt)
+        bt.inputs["Emission Strength"].default_value = 4.0
+        S.points("tips", P[:, -1], np.full(n, 0.7 * float(d["tip"]) / S.H), {"col": (rgb, "col")}, mt)
         S.three_point(key=1.0, fill=0.3, rim=2.5)
 
 

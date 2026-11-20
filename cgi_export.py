@@ -76,7 +76,7 @@ def export(args):
                 fc = H.CONFIG["fiber"]
                 hue = cr.hue[keep] + fc["hue_drift"] * i / fps
                 d.update(fiber_rgb=H.hsv_deg_to_bgr(hue, 0.85, 1.0)[:, ::-1] / 255.0,
-                         width=fc["width"] * body.W[i], tip=fc["tip_size"] * body.W[i],
+                         fiber_w=fc["width"] * body.W[i], tip=fc["tip_size"] * body.W[i],
                          env=float(hits.env[i]))
         elif args.creature == "circuit":
             n, mp_ = cr.tr_pts.shape[:2]
@@ -134,7 +134,7 @@ def composite(args):
             h, w = hot.shape[:2]
             small = cv2.resize(hot, (w // 4, h // 4), interpolation=cv2.INTER_AREA)
             bloom = cv2.GaussianBlur(small, (0, 0), h / 200) + cv2.GaussianBlur(small, (0, 0), h / 60)
-            gain = {"fiber": 0.9, "circuit": 1.0, "vowels": 0.5, "swarm": 0.4}[str(d["creature"])]
+            gain = {"fiber": 0.45, "circuit": 1.0, "vowels": 0.5, "swarm": 0.4}[str(d["creature"])]
             out = out + gain * cv2.resize(bloom, (w, h), interpolation=cv2.INTER_LINEAR)
         cv2.imwrite(stem + "_final.png", np.clip(out, 0, 255).astype(np.uint8))
         print(f"composited {stem}_final.png")
