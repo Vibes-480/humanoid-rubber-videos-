@@ -1,0 +1,5 @@
+# Python 3.9 - 3.12 (MediaPipe wheels). Tested with Python 3.12.
+mediapipe>=0.10.14
+opencv-python>=4.8
+numpy>=1.24
+tqdm>=4.60
