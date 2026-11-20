@@ -53,6 +53,10 @@ def export(args):
     want = set(args.frames)
     visible = ~body.occluded                    # hidden body parts (legs behind the pad) are skipped
     names = np.array([b[0] for b in H.BONES])
+    # Warm-up: let the physics settle on the first pose (strands start as straight
+    # spikes and need ~1 s to droop) so the first exported frame is already at rest.
+    for _ in range(int(args.warmup * fps)):
+        cr.step(0)
     for i, frame in H.iter_frames(info.path, max(want) + 1):
         cr.step(i)
         if i not in want:
@@ -152,6 +156,7 @@ def main():
     e.add_argument("--frames", type=int, nargs="+", default=[40, 100])
     e.add_argument("--out", type=Path, default=Path("cgi_out"))
     e.add_argument("--scale", type=float, default=0.5)
+    e.add_argument("--warmup", type=float, default=2.0, help="seconds of physics settling before frame 0")
     e.add_argument("--color", default=None)
     e.add_argument("--density", type=float, default=1.0)
     e.add_argument("--hair-length", type=float, default=1.0)

@@ -16,6 +16,7 @@ import numpy as np
 
 
 LIGHT = 0.3
+FAST = False                     # preview quality: no subsurface, fewer bounces
 
 
 def srgb_to_linear(c):
@@ -312,9 +313,9 @@ def build_strand_hq(S: Scene, d, P, r):
     sc.view_settings.view_transform = "AgX"
     sc.view_settings.look = "AgX - Medium High Contrast"
     sc.cycles_curves.shape = "THICK"
-    sc.cycles_curves.subdivisions = 4
-    sc.cycles.max_bounces = 8
-    sc.cycles.transparent_max_bounces = 8
+    sc.cycles_curves.subdivisions = 3 if FAST else 4
+    sc.cycles.max_bounces = 4 if FAST else 8
+    sc.cycles.transparent_max_bounces = 4 if FAST else 8
     base = srgb_to_linear(d["color"])
     rng = np.random.default_rng(11)
     var = np.clip(d["var"] * rng.uniform(0.9, 1.1, (len(P), 1)), 0.5, 1.6)
@@ -337,7 +338,7 @@ def build_strand_hq(S: Scene, d, P, r):
     Lk.new(mix.outputs[2], bsdf.inputs["Base Color"])
     Lk.new(mix.outputs[2], bsdf.inputs["Subsurface Radius"])
     bsdf.inputs["Roughness"].default_value = 0.38
-    bsdf.inputs["Subsurface Weight"].default_value = 0.45
+    bsdf.inputs["Subsurface Weight"].default_value = 0.0 if FAST else 0.45
     bsdf.inputs["Subsurface Scale"].default_value = float(np.mean(r)) * 1.5
     bsdf.inputs["Coat Weight"].default_value = 1.0
     bsdf.inputs["Coat Roughness"].default_value = 0.06
@@ -452,9 +453,20 @@ def build_swarm(S: Scene, d, vowels=False):
     S.three_point()
 
 
+def strand_geometry(S, d):
+    P = S.bl(d["points"])
+    K = P.shape[1]
+    t = np.linspace(0, 1, K, dtype=np.float32)[None]
+    r = 1.7 * (float(d["root_w"]) + (float(d["tip_w"]) - float(d["root_w"])) * t) / 2 / S.H
+    return P, np.repeat(r, len(P), 0)
+
+
 def main():
     args = [a for a in sys.argv[sys.argv.index("--") + 1:]] if "--" in sys.argv else sys.argv[1:]
-    path = args[0]
+    paths = [a for a in args if a.endswith(".npz")]
+    path = paths[0]
+    global FAST
+    FAST = "--fast" in args
     samples = int(args[args.index("--samples") + 1]) if "--samples" in args else 48
     hq = "--hq" in args
     global LIGHT
@@ -469,10 +481,20 @@ def main():
     {"strand": lambda: build_strand(S, d, hq=hq), "fiber": lambda: build_strand(S, d, fiber=True),
      "circuit": lambda: build_circuit(S, d), "swarm": lambda: build_swarm(S, d),
      "vowels": lambda: build_swarm(S, d, vowels=True)}[kind]()
-    S.sc.render.filepath = path[:-4] + ("_hq" if hq else "") + "_render.png"
-    t = time.time()
-    bpy.ops.render.render(write_still=True)
-    print(f"RENDERED {S.sc.render.filepath} in {time.time() - t:.1f}s")
+    S.sc.render.use_persistent_data = True
+    for k, pth in enumerate(paths):
+        if k > 0:
+            # Sequence mode (strand --hq): keep the scene, only move the strands.
+            dk = np.load(pth, allow_pickle=True)
+            P, r = strand_geometry(S, dk)
+            c = bpy.data.objects["strands"].data
+            c.position_data.foreach_set("vector", P.astype(np.float32).ravel())
+            c.attributes["radius"].data.foreach_set("value", r.astype(np.float32).ravel())
+            c.update_tag()
+        S.sc.render.filepath = pth[:-4] + ("_hq" if hq else "") + "_render.png"
+        t = time.time()
+        bpy.ops.render.render(write_still=True)
+        print(f"RENDERED {S.sc.render.filepath} in {time.time() - t:.1f}s", flush=True)
 
 
 if __name__ == "__main__":
