@@ -7,3 +7,5 @@ models/
 *.avi
 *.mkv
 outputs/
+.venv-blender/
+cgi_out/
