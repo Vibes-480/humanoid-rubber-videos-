@@ -6,3 +6,4 @@ models/
 *.mov
 *.avi
 *.mkv
+outputs/
