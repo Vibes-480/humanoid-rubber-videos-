@@ -76,9 +76,19 @@ CONFIG = {
         "occlusion_vis": 0.75,           # bones with lower median visibility are clipped to the person mask
     },
     "creature": {                        # --creature strand (rubber hair)
-        "strand_count": 1800,            # total strands at --density 1.0
+        "strand_count": 1200,            # total strands at --density 1.0
         "segments": 12,                  # points per strand
-        "hair_length": 0.65,             # strand length (W) at --hair-length 1.0
+        "hair_length": 0.5,              # strand length (W) at --hair-length 1.0
+        # Per-body-part length factors: short on arms and hands keeps them readable as
+        # limbs; long on the torso. Missing names use 1.0.
+        "bone_length": {"head": 0.6, "neck": 0.5, "shoulders": 0.75,
+                        "upper_arm_l": 0.55, "upper_arm_r": 0.55,
+                        "forearm_l": 0.4, "forearm_r": 0.4, "hand_l": 0.25, "hand_r": 0.25,
+                        "thigh_l": 0.7, "thigh_r": 0.7, "shin_l": 0.55, "shin_r": 0.55,
+                        "foot_l": 0.3, "foot_r": 0.3},
+        "core_brightness": 0.55,         # core body colour = base colour * this (shaded)
+        "arm_brightness": 1.25,          # arms in front of the body are lit brighter ...
+        "arm_shadow": 0.55,              # ... and cast a soft shadow on the torso (0..1)
         "length_jitter": 0.3,
         "fan_out": 0.6,                  # 0 = strands follow the 3D surface normal, 1 = flattened
                                          # sideways so front strands fan out instead of facing the lens
@@ -1110,7 +1120,7 @@ class Creature:
     def draw(self, img, glow, i, sel):
         raise NotImplementedError
 
-    def draw_core(self, img, i, sel, color, shrink=0.85, opacity=1.0, shade=False):
+    def draw_core(self, img, i, sel, color, shrink=0.85, opacity=1.0, shade=False, blur=0.012):
         """Filled capsules (soft edged). With shade=True, a cylinder-like shading from a
         distance transform gives the body some volume."""
         b = self.body
@@ -1118,7 +1128,7 @@ class Creature:
         idx = [k for k in range(b.n_bones) if sel[k]]
         if not idx:
             return
-        pad = int(R.max()) + 4
+        pad = int(R.max() + 3 * blur * b.W[i]) + 4
         xs = np.concatenate([A[idx, 0], B[idx, 0]])
         ys = np.concatenate([A[idx, 1], B[idx, 1]])
         x0, x1 = int(max(0, xs.min() - pad)), int(min(self.w, xs.max() + pad))
@@ -1134,7 +1144,7 @@ class Creature:
                 cv2.circle(m, a, r, 255, -1, LINE)
             else:
                 cv2.line(m, a, tuple(int(c) for c in B[k, :2] - off), 255, 2 * r, LINE)
-        soft = cv2.GaussianBlur(m, (0, 0), max(1.0, 0.012 * b.W[i])).astype(np.float32) / 255
+        soft = cv2.GaussianBlur(m, (0, 0), max(1.0, blur * b.W[i])).astype(np.float32) / 255
         roi = img[y0:y1, x0:x1].astype(np.float32)
         col = np.broadcast_to(np.asarray(color, np.float32), roi.shape)
         if shade:
@@ -1144,6 +1154,20 @@ class Creature:
             col = col * (0.35 + 0.65 * vol[..., None])
         a = (soft * opacity)[..., None]
         img[y0:y1, x0:x1] = (roi * (1 - a) + col * a).astype(np.uint8)
+
+    ARM_BONES = {"l": [k for k, b in enumerate(BONES) if b[0] in ("upper_arm_l", "forearm_l", "hand_l")],
+                 "r": [k for k, b in enumerate(BONES) if b[0] in ("upper_arm_r", "forearm_r", "hand_r")]}
+
+    def arms_in_front(self, i) -> np.ndarray:
+        """Bones of each arm whose hand/forearm is closer to the camera than the torso."""
+        b = self.body
+        out = np.zeros(b.n_bones, bool)
+        torso_z = (b.A[i, 0, 2] + b.B[i, 0, 2]) / 2
+        for side, ks in self.ARM_BONES.items():
+            arm_z = b.B[i, ks[1:], 2].mean()               # forearm + hand ends
+            if arm_z < torso_z + 0.05 * b.W[i]:
+                out[ks] = True
+        return out
 
     def draw_contact_shadow(self, img, i):
         b = self.body
@@ -1178,6 +1202,8 @@ class StrandCreature(Creature):
         self.th = (rng.random(n) * 2 * np.pi).astype(np.float32)
         jit = c["length_jitter"]
         self.L = (c["hair_length"] * args.hair_length * (1 + jit * (2 * rng.random(n) - 1))).astype(np.float32)
+        bl = c.get("bone_length", CONFIG["creature"]["bone_length"])
+        self.L *= np.array([bl.get(name, 1.0) for name, *_ in BONES], np.float32)[self.bones]
         self.var = rng.standard_normal((n, 3)).astype(np.float32)
         ph = CONFIG["physics"]
         s = self.stiffness(c)
@@ -1319,8 +1345,9 @@ class StrandCreature(Creature):
         hi_c = np.clip(col.mean(1) + rc["specular"] * 255 * spec_m[:, None], 0, 255)
         o_back, o_front = self._order(sel_s)
 
-        def paint(order):
-            P_l, C_l = pts[order].tolist(), col[order].tolist()
+        def paint(order, gain=1.0):
+            P_l = pts[order].tolist()
+            C_l = (np.clip(col[order] * gain, 0, 255) if gain != 1.0 else col[order]).tolist()
             wl = widths.tolist()
             for p, c in zip(P_l, C_l):
                 for j in range(K - 1):
@@ -1329,10 +1356,25 @@ class StrandCreature(Creature):
             for k in glossy.tolist():
                 cv2.polylines(img, [hl_pts[k]], False, hi_c[k].tolist(), hw, LINE)
 
+        # Layering: back-facing strands, torso core, torso strands, then each arm that is
+        # in front of the torso (core + strands) so the arms read as limbs, not as more fur.
+        front_arms = self.arms_in_front(i) & sel
+        o_back = o_back[~front_arms[self.bones[o_back]]]
         paint(o_back)
-        core = np.clip(base * (1 - rc["root_darken"]) * rc["core_darkness"], 0, 255)
-        self.draw_core(img, i, sel, core, shrink=0.9)
-        paint(o_front)
+        core = np.clip(base * CONFIG["creature"]["core_brightness"], 0, 255)
+        self.draw_core(img, i, sel & ~front_arms, core, shrink=1.0, shade=True)
+        is_arm = front_arms[self.bones[o_front]]
+        paint(o_front[~is_arm])
+        if front_arms.any():
+            cc = CONFIG["creature"]
+            arm_o = np.flatnonzero(sel_s & front_arms[self.bones])
+            arm_o = arm_o[np.argsort(-self.P[arm_o, :, 2].mean(1))]
+            # Soft shadow of the arms on the body behind them separates pink from pink.
+            self.draw_core(img, i, front_arms, (0, 0, 0), shrink=1.0 + self.L.mean() * 1.2,
+                           opacity=cc["arm_shadow"], blur=0.12)
+            self.draw_core(img, i, front_arms, np.clip(core * cc["arm_brightness"], 0, 255),
+                           shrink=1.0, shade=True)
+            paint(arm_o, cc["arm_brightness"])
 
 
 class FiberCreature(StrandCreature):
